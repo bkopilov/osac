@@ -1485,14 +1485,7 @@
     "networkManagers": {
       "type": "array",
       "description": "Network manager ConfigMaps for the osac-operator dispatcher",
-      "default": [
-        {
-          "name": "cudn_evpn",
-          "role": "k8s",
-          "description": "OVN EVPN k8s manager for VM-to-fabric bridging (Phase 1: IPv4-only)",
-          "capabilities": "ipv4"
-        }
-      ],
+      "default": [],
       "items": {
         "type": "object",
         "required": [

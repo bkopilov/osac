@@ -364,11 +364,10 @@ validation:
 #     role: k8s
 #     description: "CUDN LocalNet k8s manager"
 #     capabilities: "ipv4,ipv6,dualStack"
-networkManagers:
-  - name: cudn_evpn
-    role: k8s
-    description: "OVN EVPN k8s manager for VM-to-fabric bridging (Phase 1: IPv4-only)"
-    capabilities: "ipv4"
+# Keep the base chart free of environment-specific registrations. Environments
+# with prepared EVPN/BGP/VTEP infrastructure can opt in with
+# ci/cudn-evpn-values.yaml.
+networkManagers: []
 
 # --- MetalLB Address Pool ---
 metallb:

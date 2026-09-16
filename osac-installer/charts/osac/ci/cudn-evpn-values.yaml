@@ -1,0 +1,9 @@
+# Explicit opt-in overlay for environments with manually prepared
+# EVPN/BGP/VTEP infrastructure. The ConfigMap metadata name is normalized by
+# the chart template, while data.name remains the manager identity consumed by
+# the operator.
+networkManagers:
+  - name: cudn_evpn
+    role: k8s
+    description: "OVN EVPN k8s manager for VM-to-fabric bridging (Phase 1: IPv4-only)"
+    capabilities: "ipv4"
