@@ -51,7 +51,7 @@ var _ = Describe("NetworkClass manager readiness", func() {
 			}
 			g.Expect(cudnEVPN).ToNot(BeNil())
 			g.Expect(cudnEVPN.GetLabels()).To(HaveKeyWithValue(networkmanager.LabelK8sManager, "true"))
-			g.Expect(cudnEVPN.Data["capabilities"]).To(ContainSubstring("ipv4"))
+			g.Expect(cudnEVPN.Data["capabilities"]).To(Equal("ipv4"))
 		}, time.Minute, time.Second).Should(Succeed())
 
 		networkClassesClient := privatev1.NewNetworkClassesClient(tool.InternalView().AdminConn())
