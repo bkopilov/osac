@@ -1,4 +1,4 @@
-# CUDN EVPN/Netris VMaaS E2E profile -- complete OSAC instance values.
+# CUDN EVPN/Netris VMaaS + BMaaS E2E profile -- complete OSAC instance values.
 #
 # This profile is intentionally opt-in. It assumes that the cluster has the
 # Phase 1 IPv4 EVPN/BGP/VTEP prerequisites and the cudn_evpn implementation
@@ -15,7 +15,7 @@ global:
     vmaas:
       enabled: true
     bmaas:
-      enabled: false
+      enabled: true
     maas:
       enabled: false
 
@@ -42,6 +42,7 @@ operator:
   controllers:
     tenant: true
     networking: true
+    networkingProvisioning: false
     storage: true
   hubAccess:
     enabled: true
@@ -193,6 +194,23 @@ networkClass:
 # --- Validation ---
 validation:
   enabled: true
+
+# --- Bare Metal Fulfillment Operator ---
+# VMaaS and BMaaS share the EVPN/Netris NetworkClass. The target cluster must
+# provide Metal3/BareMetalHost inventory for the BMaaS side of the E2E test.
+bmf:
+  image:
+    repository: ghcr.io/osac-project/bare-metal-fulfillment-operator
+    tag: latest
+    pullPolicy: Always
+  env:
+    aapUrl: "http://osac-aap/api/controller"
+    aapInsecureSkipVerify: "true"
+    enableNetworkingProvisioning: "false"
+  metal3:
+    enabled: true
+    namespace: host-inventory
+    hostClass: metal3
 
 # --- Cluster Versions ---
 clusterVersions:

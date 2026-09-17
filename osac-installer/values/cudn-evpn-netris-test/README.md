@@ -1,12 +1,14 @@
-# CUDN EVPN/Netris VMaaS E2E profile
+# CUDN EVPN/Netris VMaaS + BMaaS E2E profile
 
 This is the explicit opt-in installer profile for the Phase 1 IPv4 CUDN EVPN
-environment used with VMaaS. It is intentionally separate from the base chart
-and all normal profiles.
+environment used with VMaaS and BMaaS. VMs and bare-metal instances use the
+same EVPN/Netris NetworkClass and can therefore be attached to the same VPC.
+It is intentionally separate from the base chart and all normal profiles.
 
 The profile provides:
 
 - the normal VMaaS infrastructure and OSAC instance values;
+- BMaaS with the Metal3 backend enabled for bare-metal inventory;
 - `netris` as the fabric manager and `cudn_evpn` as the k8s manager;
 - a default `NetworkClass` with `fabricManager: netris` and
   `k8sManager: cudn_evpn`;
@@ -14,9 +16,10 @@ The profile provides:
   fabric and network fulfillment jobs.
 
 Before installing, the target OpenShift cluster must already have the Phase 1
-EVPN/BGP/VTEP prerequisites and the `cudn_evpn` implementation. This profile
-only registers and selects the managers; it does not provision that external
-fabric or implement the manager.
+EVPN/BGP/VTEP prerequisites, the `cudn_evpn` implementation, and the Metal3
+BareMetalHost inventory needed by BMaaS. This profile only registers and
+selects the managers; it does not provision that external fabric or implement
+the manager.
 
 Netris passwords, SSH keys, and site-specific values must be supplied through
 a private values file. From `osac-installer/`:

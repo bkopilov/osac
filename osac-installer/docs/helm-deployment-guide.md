@@ -88,7 +88,7 @@ Each profile has two files: `infra.yaml` (infrastructure config) and `instance.y
 | `values/caas-ci/` | CaaS CI (cluster provisioning) |
 | `values/bmaas-ci/` | BMaaS CI (bare metal) |
 | `values/dev/` | Local dev (Kind) |
-| `values/cudn-evpn-netris-test/` | Explicit CUDN EVPN + Netris VMaaS E2E profile (OpenShift only) |
+| `values/cudn-evpn-netris-test/` | Explicit CUDN EVPN + Netris VMaaS/BMaaS E2E profile (OpenShift only) |
 
 Copy and customize for your environment:
 
