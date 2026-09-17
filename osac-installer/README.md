@@ -147,7 +147,7 @@ make install-osac  PLATFORM=openshift PROFILE=<profile> NS=<namespace>   # OSAC 
 | Variable | Description |
 |----------|-------------|
 | `PLATFORM` | `kind` or `openshift` (required) |
-| `PROFILE` | `dev`, `dev-full`, `vmaas-ci`, `bmaas-ci`, `caas-ci`, or `full-ci` (required; `dev-full` is kind only) |
+| `PROFILE` | `dev`, `dev-full`, `vmaas-ci`, `bmaas-ci`, `caas-ci`, `full-ci`, or `cudn-evpn-netris-test` (required; `dev-full` is kind only) |
 | `NS` | Target namespace (required) |
 | `EXTRA_HELM_ARGS` | Extra `--set`/`--set-string` args appended to helm commands |
 
@@ -161,6 +161,30 @@ the end-to-end "create a VM from the UI" experience:
 
 ```bash
 make install PLATFORM=kind PROFILE=dev-full NS=osac
+```
+
+#### CUDN EVPN/Netris E2E environment
+
+`PROFILE=cudn-evpn-netris-test` is an explicit OpenShift-only profile. It
+contains the normal CaaS instance and infrastructure values, registers both
+`netris` (fabric) and `cudn_evpn` (k8s), and selects them on the default
+NetworkClass. It does not create the external Phase 1 EVPN/BGP/VTEP fabric or
+provide the `cudn_evpn` implementation; those prerequisites must be prepared
+before installation.
+
+Install it with:
+
+```bash
+make install PLATFORM=openshift PROFILE=cudn-evpn-netris-test NS=osac
+```
+
+The profile includes the non-secret Netris controller/site/tenant settings.
+Supply the controller password and any site-specific Netris or SSH values in
+a private values file and pass it through `INSTANCE_VALUES_EXTRA`, for example:
+
+```bash
+make install PLATFORM=openshift PROFILE=cudn-evpn-netris-test NS=osac \
+  INSTANCE_VALUES_EXTRA="-f cudn-evpn-netris-test-secrets.local.yaml"
 ```
 
 On top of `dev`, `dev-full` adds (via `scripts/dev-full/`, orchestrated by the
