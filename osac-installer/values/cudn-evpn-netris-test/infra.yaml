@@ -1,0 +1,52 @@
+# CUDN EVPN/Netris E2E profile -- infrastructure values for osac-deps +
+# osac-infra charts.
+#
+# The CUDN EVPN/BGP/VTEP fabric is an external prerequisite. This file enables
+# the same cluster prerequisites as the CaaS E2E profile; it does not create
+# the external EVPN fabric itself.
+
+# --- OLM Subscriptions (osac-deps) ---
+certManager:
+  enabled: true
+trustManager:
+  enabled: true
+aapOperator:
+  enabled: true
+lvms:
+  enabled: true
+metallb:
+  enabled: true
+cnv:
+  enabled: false
+mce:
+  enabled: true
+  osImages:
+    - openshiftVersion: "4.22"
+      version: "9.8.20260428-0"
+      url: "https://mirror.openshift.com/pub/openshift-v4/x86_64/dependencies/rhcos/4.22/4.22.0/rhcos-4.22.0-x86_64-live-iso.x86_64.iso"
+      cpuArchitecture: "x86_64"
+
+# --- Infrastructure (osac-infra) ---
+caIssuer:
+  enabled: true
+keycloak:
+  enabled: true
+  devFixtures:
+    enabled: true
+kafka:
+  enabled: true
+
+# --- Bundled PostgreSQL ---
+# Single-pod ephemeral database for testing.
+bundledPostgres:
+  enabled: true
+  database:
+    name: service
+
+# --- Bundled OpenBao ---
+# Single-pod ephemeral Vault-compatible store for testing.
+bundledVault:
+  enabled: true
+  devRootToken: "dev-root-token"
+  podSecurityContext:
+    runAsNonRoot: true
