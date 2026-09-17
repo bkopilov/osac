@@ -200,7 +200,7 @@ single-image `kind-load-image` target when loading only that component is useful
 #### CUDN EVPN/Netris E2E environment
 
 `PROFILE=cudn-evpn-netris-test` is an explicit OpenShift-only profile. It
-contains the normal CaaS instance and infrastructure values, registers both
+contains the normal VMaaS instance and infrastructure values, registers both
 `netris` (fabric) and `cudn_evpn` (k8s), and selects them on the default
 NetworkClass. It does not create the external Phase 1 EVPN/BGP/VTEP fabric or
 provide the `cudn_evpn` implementation; those prerequisites must be prepared
