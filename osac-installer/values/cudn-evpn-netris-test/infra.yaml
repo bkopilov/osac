@@ -1,9 +1,10 @@
 # CUDN EVPN/Netris VMaaS E2E profile -- infrastructure values for osac-deps
 # and osac-infra charts.
 #
-# The CUDN EVPN/BGP/VTEP fabric is an external prerequisite. This file enables
-# the same cluster prerequisites as the CaaS E2E profile; it does not create
-# the external EVPN fabric itself.
+# The CUDN EVPN/BGP/VTEP fabric and its EVPN FRRConfiguration are external
+# prerequisites. This file enables the VMaaS cluster prerequisites; it does not
+# install the FRR operator, create FRRConfiguration, or create the external
+# EVPN fabric itself.
 
 # --- OLM Subscriptions (osac-deps) ---
 certManager:
