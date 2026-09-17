@@ -1,17 +1,17 @@
-# CUDN EVPN/Netris E2E profile
+# CUDN EVPN/Netris VMaaS E2E profile
 
 This is the explicit opt-in installer profile for the Phase 1 IPv4 CUDN EVPN
-environment. It is intentionally separate from the base chart and all normal
-profiles.
+environment used with VMaaS. It is intentionally separate from the base chart
+and all normal profiles.
 
 The profile provides:
 
-- the normal CaaS infrastructure and OSAC instance values;
+- the normal VMaaS infrastructure and OSAC instance values;
 - `netris` as the fabric manager and `cudn_evpn` as the k8s manager;
 - a default `NetworkClass` with `fabricManager: netris` and
   `k8sManager: cudn_evpn`;
-- the standard Netris AAP instance-group configuration needed by the cluster
-  and network fulfillment jobs.
+- the standard Netris AAP instance-group configuration needed by the EVPN
+  fabric and network fulfillment jobs.
 
 Before installing, the target OpenShift cluster must already have the Phase 1
 EVPN/BGP/VTEP prerequisites and the `cudn_evpn` implementation. This profile

@@ -1,4 +1,4 @@
-# CUDN EVPN/Netris E2E profile -- complete OSAC instance values.
+# CUDN EVPN/Netris VMaaS E2E profile -- complete OSAC instance values.
 #
 # This profile is intentionally opt-in. It assumes that the cluster has the
 # Phase 1 IPv4 EVPN/BGP/VTEP prerequisites and the cudn_evpn implementation
@@ -11,13 +11,17 @@ global:
   osacDeploymentId: "ci/osac"
   services:
     caas:
-      enabled: true
-    vmaas:
       enabled: false
-    bmaas:
+    vmaas:
       enabled: true
+    bmaas:
+      enabled: false
     maas:
       enabled: false
+
+# --- CSI Driver ---
+csiDriver:
+  enabled: true
 
 # --- Operator ---
 operator:
@@ -189,16 +193,6 @@ networkClass:
 # --- Validation ---
 validation:
   enabled: true
-
-# --- Bare Metal Fulfillment Operator ---
-# BMaaS remains enabled because CaaS satisfies the chart's service constraint;
-# this profile does not require Metal3 hardware.
-bmf:
-  replicaCount: 0
-  image:
-    repository: ghcr.io/osac-project/bare-metal-fulfillment-operator
-    tag: latest
-    pullPolicy: Always
 
 # --- Cluster Versions ---
 clusterVersions:
