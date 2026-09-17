@@ -42,7 +42,7 @@ operator:
   controllers:
     tenant: true
     networking: true
-    networkingProvisioning: false
+    networkingProvisioning: true
     storage: true
   hubAccess:
     enabled: true
