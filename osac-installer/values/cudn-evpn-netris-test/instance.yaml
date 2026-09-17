@@ -1,10 +1,10 @@
 # CUDN EVPN/Netris VMaaS + BMaaS E2E profile -- complete OSAC instance values.
 #
 # This profile is intentionally opt-in. It assumes that the cluster has the
-# Phase 1 IPv4 EVPN/BGP/VTEP prerequisites and the cudn_evpn implementation
-# installed or otherwise available. The installer registers the managers and
-# selects them for the default NetworkClass; it does not create the external
-# EVPN fabric.
+# Phase 1 IPv4 EVPN/BGP/VTEP prerequisites, an EVPN FRRConfiguration, and the
+# cudn_evpn implementation installed or otherwise available. The installer
+# registers the managers and selects them for the default NetworkClass; it does
+# not create the FRRConfiguration or external EVPN fabric.
 
 # --- Service Enablement ---
 global:

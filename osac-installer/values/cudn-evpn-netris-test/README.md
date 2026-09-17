@@ -16,10 +16,11 @@ The profile provides:
   fabric and network fulfillment jobs.
 
 Before installing, the target OpenShift cluster must already have the Phase 1
-EVPN/BGP/VTEP prerequisites, the `cudn_evpn` implementation, and the Metal3
-BareMetalHost inventory needed by BMaaS. This profile only registers and
-selects the managers; it does not provision that external fabric or implement
-the manager.
+EVPN/BGP/VTEP prerequisites, the EVPN `FRRConfiguration`, the `cudn_evpn`
+implementation, and the Metal3 BareMetalHost inventory needed by BMaaS. This
+profile only registers and selects the managers; it does not install the FRR
+operator, create the `FRRConfiguration`, provision the external fabric, or
+implement the manager.
 
 Netris passwords, SSH keys, and site-specific values must be supplied through
 a private values file. From `osac-installer/`:
