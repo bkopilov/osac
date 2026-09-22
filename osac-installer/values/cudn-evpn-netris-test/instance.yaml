@@ -206,7 +206,7 @@ bmf:
   env:
     aapUrl: "http://osac-aap/api/controller"
     aapInsecureSkipVerify: "true"
-    enableNetworkingProvisioning: "false"
+    enableNetworkingProvisioning: "true"
   metal3:
     enabled: true
     namespace: host-inventory
