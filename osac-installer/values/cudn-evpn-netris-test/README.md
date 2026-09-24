@@ -9,7 +9,8 @@ The profile provides:
 
 - the normal VMaaS infrastructure and OSAC instance values;
 - BMaaS with the Metal3 backend enabled for bare-metal inventory;
-- `netris` as the fabric manager and `cudn_evpn` as the k8s manager;
+- `netris` as the fabric manager and `cudn_evpn` as the k8s manager via the
+  operator's nested `networkManagers` registration map;
 - a default `NetworkClass` with `fabricManager: netris` and
   `k8sManager: cudn_evpn`;
 - the standard Netris AAP instance-group configuration needed by the EVPN

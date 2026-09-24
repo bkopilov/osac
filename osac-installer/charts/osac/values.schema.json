@@ -1579,57 +1579,6 @@
         }
       }
     },
-    "networkManagers": {
-      "type": "array",
-      "description": "Network manager ConfigMaps for the osac-operator dispatcher",
-      "default": [],
-      "items": {
-        "type": "object",
-        "required": [
-          "name",
-          "role"
-        ],
-        "properties": {
-          "name": {
-            "type": "string",
-            "description": "Manager name (e.g. netris, cudn_localnet)"
-          },
-          "role": {
-            "type": "string",
-            "enum": [
-              "fabric",
-              "k8s"
-            ],
-            "description": "Manager role: fabric or k8s"
-          },
-          "description": {
-            "type": "string",
-            "description": "Human-readable description"
-          },
-          "capabilities": {
-            "type": "string",
-            "description": "Comma-separated capabilities (e.g. ipv4,ipv6,dualStack)",
-            "default": "ipv4"
-          }
-        }
-      }
-    },
-    "metallb": {
-      "type": "object",
-      "description": "MetalLB IPAddressPool and L2Advertisement for LoadBalancer services",
-      "properties": {
-        "enabled": {
-          "type": "boolean",
-          "description": "Create MetalLB IPAddressPool and L2Advertisement",
-          "default": false
-        },
-        "addressCIDR": {
-          "type": "string",
-          "description": "CIDR range for the MetalLB address pool",
-          "default": "192.168.40.0/24"
-        }
-      }
-    },
     "hubAccess": {
       "type": "object",
       "description": "Hub access SA, RBAC, and create-hub hook (CI/dev only)",

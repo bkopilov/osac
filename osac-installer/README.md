@@ -201,8 +201,9 @@ single-image `kind-load-image` target when loading only that component is useful
 
 `PROFILE=cudn-evpn-netris-test` is an explicit OpenShift-only profile. It
 contains the normal VMaaS + BMaaS instance and infrastructure values, registers
-both `netris` (fabric) and `cudn_evpn` (k8s), and selects them on the default
-NetworkClass. It does not install the FRR operator, create the Phase 1 EVPN
+both `netris` (fabric) and `cudn_evpn` (k8s) through the operator's nested
+`networkManagers` map, and selects them on the default NetworkClass. It does
+not install the FRR operator, create the Phase 1 EVPN
 `FRRConfiguration`, create the external EVPN/BGP/VTEP fabric, or provide the
 `cudn_evpn` implementation; those prerequisites must be prepared before
 installation.

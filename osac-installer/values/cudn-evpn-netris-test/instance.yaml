@@ -9,6 +9,21 @@
 # --- Service Enablement ---
 global:
   osacDeploymentId: "ci/osac"
+  networking:
+    # Netris remains the AAP/fabric backend. The profile's expert NetworkClass
+    # below additionally selects cudn_evpn as the Kubernetes manager.
+    fabricManager: "netris"
+    k8sManager: ""
+    netris:
+      controllerUrl: "https://redhat-ctl.netris.io"
+      credentials:
+        username: "netris"
+        externalSecret: true
+      siteId: "5"
+      tenantId: "1"
+      tenantName: "Admin"
+  expertOverrides:
+    networkClass: true
   services:
     caas:
       enabled: false
@@ -29,8 +44,6 @@ operator:
     repository: ghcr.io/osac-project/osac-operator
     tag: latest
     pullPolicy: Always
-  provisioning:
-    provider: "aap"
   aap:
     insecureSkipVerify: "true"
     tokenSecret:
@@ -44,6 +57,24 @@ operator:
     networking: true
     networkingProvisioning: true
     storage: true
+  networkManagers:
+    enabled: true
+    fabricManagers:
+      cudn_net:
+        enabled: false
+      netris:
+        enabled: true
+        description: "Netris SDN fabric manager"
+        capabilities:
+        - ipv4
+    k8sManagers:
+      k8s_only:
+        enabled: false
+      cudn_evpn:
+        enabled: true
+        description: "OVN EVPN k8s manager for VM-to-fabric bridging (Phase 1: IPv4-only)"
+        capabilities:
+        - ipv4
   hubAccess:
     enabled: true
   tenants:
@@ -165,22 +196,9 @@ aap:
         NETRIS_TENANT_ID: "1"
         NETRIS_TENANT_NAME: "Admin"
 
-# --- Network manager registrations ---
-# This list is complete for this profile. Helm replaces lists rather than
-# appending them, so keep both the fabric and k8s manager registrations here.
-networkManagers:
-  - name: netris
-    role: fabric
-    description: "Netris SDN fabric manager"
-    capabilities: "ipv4"
-  - name: cudn_evpn
-    role: k8s
-    description: "OVN EVPN k8s manager for VM-to-fabric bridging (Phase 1: IPv4-only)"
-    capabilities: "ipv4"
-
 # --- EVPN NetworkClass selection ---
-# The two manager names must match the registrations above. This is the only
-# profile that selects cudn_evpn; normal profiles retain their existing values.
+# The two manager names must match the operator registrations above. This is
+# the only profile that selects cudn_evpn; normal profiles retain their values.
 networkClass:
   enabled: true
   title: "CUDN EVPN with Netris"
