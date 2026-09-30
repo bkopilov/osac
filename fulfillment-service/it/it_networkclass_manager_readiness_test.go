@@ -21,7 +21,7 @@ import (
 	. "github.com/onsi/ginkgo/v2/dsl/core"
 	. "github.com/onsi/gomega"
 	corev1 "k8s.io/api/core/v1"
-	crclient "sigs.k8s.io/controller-runtime/pkg/client"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/uuid"
 	"github.com/osac-project/osac/osac-operator/pkg/networkmanager"
@@ -29,59 +29,90 @@ import (
 )
 
 var _ = Describe("NetworkClass manager readiness", func() {
-	It("reaches READY after both configured managers are discovered", func(ctx context.Context) {
+	It("moves from PENDING to FAILED until all managers are registered, then reaches READY", func(ctx context.Context) {
 		kubeClient := tool.KubeClient()
 		const namespace = "osac"
-
-		By("waiting for the cudn_evpn manager registration")
-		Eventually(func(g Gomega) {
-			var configMaps corev1.ConfigMapList
-			err := kubeClient.List(ctx, &configMaps,
-				crclient.InNamespace(namespace),
-				crclient.MatchingLabels{networkmanager.LabelK8sManager: "true"},
-			)
-			g.Expect(err).ToNot(HaveOccurred())
-
-			var cudnEVPN *corev1.ConfigMap
-			for i := range configMaps.Items {
-				if configMaps.Items[i].Data["name"] == "cudn_evpn" {
-					cudnEVPN = &configMaps.Items[i]
-					break
-				}
-			}
-			g.Expect(cudnEVPN).ToNot(BeNil())
-			g.Expect(cudnEVPN.GetLabels()).To(HaveKeyWithValue(networkmanager.LabelK8sManager, "true"))
-			g.Expect(cudnEVPN.Data["capabilities"]).To(Equal("ipv4"))
-		}, time.Minute, time.Second).Should(Succeed())
-
 		networkClassesClient := privatev1.NewNetworkClassesClient(tool.InternalView().AdminConn())
+
+		suffix := uuid.New()
+		fabricManagerName := fmt.Sprintf("it-fabric-%s", suffix)
+		k8sManagerName := fmt.Sprintf("it-k8s-%s", suffix)
+		fabricConfigMap := &corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      fmt.Sprintf("it-fabric-manager-%s", suffix),
+				Namespace: namespace,
+				Labels:    map[string]string{networkmanager.LabelFabricManager: "true"},
+			},
+			Data: map[string]string{
+				"name":         fabricManagerName,
+				"capabilities": "ipv4,ipv6,dualStack",
+			},
+		}
+		k8sConfigMap := &corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      fmt.Sprintf("it-k8s-manager-%s", suffix),
+				Namespace: namespace,
+				Labels:    map[string]string{networkmanager.LabelK8sManager: "true"},
+			},
+			Data: map[string]string{
+				"name":         k8sManagerName,
+				"capabilities": "ipv4",
+			},
+		}
+
+		By("creating a NetworkClass before its manager registrations exist")
 		createResponse, err := networkClassesClient.Create(ctx, privatev1.NetworkClassesCreateRequest_builder{
 			Object: privatev1.NetworkClass_builder{
-				Metadata:      privatev1.Metadata_builder{Name: fmt.Sprintf("test-cudn-evpn-%s", uuid.New())}.Build(),
-				Title:         "CUDN EVPN Network Class",
-				FabricManager: new("netris"),
-				K8SManager:    new("cudn_evpn"),
+				Metadata:      privatev1.Metadata_builder{Name: fmt.Sprintf("it-network-class-%s", suffix)}.Build(),
+				Title:         "Integration NetworkClass manager readiness",
+				FabricManager: &fabricManagerName,
+				K8SManager:    &k8sManagerName,
 			}.Build(),
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
 		networkClassID := createResponse.GetObject().GetId()
-		DeferCleanup(func() {
-			_, _ = networkClassesClient.Delete(ctx, privatev1.NetworkClassesDeleteRequest_builder{
+		DeferCleanup(func(cleanupCtx context.Context) {
+			_, _ = networkClassesClient.Delete(cleanupCtx, privatev1.NetworkClassesDeleteRequest_builder{
 				Id: networkClassID,
 			}.Build())
+			_ = kubeClient.Delete(cleanupCtx, fabricConfigMap)
+			_ = kubeClient.Delete(cleanupCtx, k8sConfigMap)
 		})
 
 		Expect(createResponse.GetObject().GetStatus().GetState()).To(Equal(
 			privatev1.NetworkClassState_NETWORK_CLASS_STATE_PENDING))
 
-		By("waiting for the NetworkClass to become READY")
+		By("registering the fabric manager while the Kubernetes manager is still missing")
+		Expect(kubeClient.Create(ctx, fabricConfigMap)).To(Succeed())
+
+		By("waiting for the NetworkClass to report the missing manager")
 		Eventually(func(g Gomega) {
 			getResponse, getErr := networkClassesClient.Get(ctx, privatev1.NetworkClassesGetRequest_builder{
 				Id: networkClassID,
 			}.Build())
 			g.Expect(getErr).ToNot(HaveOccurred())
-			g.Expect(getResponse.GetObject().GetStatus().GetState()).To(Equal(
+			object := getResponse.GetObject()
+			g.Expect(object.GetStatus().GetState()).To(Equal(
+				privatev1.NetworkClassState_NETWORK_CLASS_STATE_FAILED))
+			g.Expect(object.GetStatus().GetMessage()).To(ContainSubstring(k8sManagerName))
+		}, 2*time.Minute, time.Second).Should(Succeed())
+
+		By("registering the Kubernetes manager")
+		Expect(kubeClient.Create(ctx, k8sConfigMap)).To(Succeed())
+
+		By("waiting for the NetworkClass to recover with the capability intersection")
+		Eventually(func(g Gomega) {
+			getResponse, getErr := networkClassesClient.Get(ctx, privatev1.NetworkClassesGetRequest_builder{
+				Id: networkClassID,
+			}.Build())
+			g.Expect(getErr).ToNot(HaveOccurred())
+			object := getResponse.GetObject()
+			g.Expect(object.GetStatus().GetState()).To(Equal(
 				privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY))
-		}, time.Minute, time.Second).Should(Succeed())
+			g.Expect(object.GetStatus().HasMessage()).To(BeFalse())
+			g.Expect(object.GetCapabilities().GetSupportsIpv4()).To(BeTrue())
+			g.Expect(object.GetCapabilities().GetSupportsIpv6()).To(BeFalse())
+			g.Expect(object.GetCapabilities().GetSupportsDualStack()).To(BeFalse())
+		}, 2*time.Minute, time.Second).Should(Succeed())
 	})
 })
