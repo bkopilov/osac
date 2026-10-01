@@ -96,7 +96,14 @@ var _ = Describe("Canonical networking Hub cache-entry routing", func() {
 				})
 		})
 		setNetworkClassCanonicalHub(ctx, networkClassesClient, networkClassID, hubId)
-		expectNetworkClassHub(ctx, networkClassesClient, networkClassID, hubId)
+		expectNetworkClassStatus(
+			ctx,
+			networkClassesClient,
+			networkClassID,
+			privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY,
+			hubId,
+			"",
+		)
 
 		By("creating VirtualNetwork, Subnet, and SecurityGroup against the canonical NetworkClass")
 		virtualNetworkID := fmt.Sprintf("test-hub-a-vn-%s", uuid.New())
