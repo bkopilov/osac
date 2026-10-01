@@ -177,8 +177,10 @@ var _ = Describe("NetworkClassCapabilitiesReconciler", func() {
 		Expect(updates[0].GetId()).To(Equal("nc-caps-cudn-evpn"))
 		Expect(updates[0].GetCapabilities().GetSupportsIpv4()).To(BeTrue())
 		Expect(updates[0].GetCapabilities().GetSupportsIpv6()).To(BeFalse())
-		Expect(updates[0].GetStatus().GetState()).To(Equal(
+		Expect(updates[0].GetStatus().GetManagerState()).To(Equal(
 			privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY))
+		Expect(updates[0].GetStatus().GetState()).To(Equal(
+			privatev1.NetworkClassState_NETWORK_CLASS_STATE_PENDING))
 	})
 
 	It("does not update the NetworkClass when computed capabilities already match", func() {
@@ -194,7 +196,8 @@ var _ = Describe("NetworkClassCapabilitiesReconciler", func() {
 			FabricManager: ptr.To("fabric-caps-noop"),
 			Capabilities:  &privatev1.NetworkClassCapabilities{SupportsIpv4: true},
 			Status: &privatev1.NetworkClassStatus{
-				State: privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY,
+				State:        privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY,
+				ManagerState: privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY,
 			},
 		}
 		var updates []*privatev1.NetworkClass
@@ -227,18 +230,38 @@ var _ = Describe("NetworkClassCapabilitiesReconciler", func() {
 		disc, err := networkmanager.NewDiscovery(k8sClient, namespace)
 		Expect(err).NotTo(HaveOccurred())
 
-		nc := &privatev1.NetworkClass{Id: "nc-caps-bad-fabric", FabricManager: ptr.To("unregistered-fabric")}
+		nc := &privatev1.NetworkClass{
+			Id:            "nc-caps-bad-fabric",
+			FabricManager: ptr.To("unregistered-fabric"),
+			Status: &privatev1.NetworkClassStatus{
+				State:   privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY,
+				Hub:     "hub-a",
+				Message: ptr.To("hub is ready"),
+			},
+		}
 		var updates []*privatev1.NetworkClass
 		stubClient := newListingNetworkClassClient([]*privatev1.NetworkClass{nc}, &updates)
+		var updateRequests []*privatev1.NetworkClassesUpdateRequest
+		stubClient.updateFunc = func(_ context.Context, request *privatev1.NetworkClassesUpdateRequest, _ ...grpc.CallOption) (*privatev1.NetworkClassesUpdateResponse, error) {
+			updateRequests = append(updateRequests, request)
+			updates = append(updates, request.GetObject())
+			return &privatev1.NetworkClassesUpdateResponse{Object: request.GetObject()}, nil
+		}
 		resolver := dispatcher.NewResolver(dispatcheradapter.NewNetworkClassAdapter(stubClient), disc)
 
 		reconciler := NewNetworkClassCapabilitiesReconciler(stubClient, resolver, namespace)
 		_, err = reconciler.Reconcile(ctx, ctrl.Request{})
 		Expect(err).NotTo(HaveOccurred())
 		Expect(updates).To(HaveLen(1))
-		Expect(updates[0].GetStatus().GetState()).To(Equal(
+		Expect(updates[0].GetStatus().GetManagerState()).To(Equal(
 			privatev1.NetworkClassState_NETWORK_CLASS_STATE_FAILED))
-		Expect(updates[0].GetStatus().GetMessage()).To(ContainSubstring("unregistered-fabric"))
+		Expect(updates[0].GetStatus().GetManagerMessage()).To(ContainSubstring("unregistered-fabric"))
+		Expect(updates[0].GetStatus().GetState()).To(Equal(privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY))
+		Expect(updates[0].GetStatus().GetHub()).To(Equal("hub-a"))
+		Expect(updates[0].GetStatus().GetMessage()).To(Equal("hub is ready"))
+		Expect(updateRequests).To(HaveLen(1))
+		Expect(updateRequests[0].GetUpdateMask().GetPaths()).To(ConsistOf(
+			"status.manager_state", "status.manager_message"))
 	})
 
 	It("marks a NetworkClass referencing an unregistered k8s manager as failed", func() {
@@ -263,9 +286,9 @@ var _ = Describe("NetworkClassCapabilitiesReconciler", func() {
 		_, err = reconciler.Reconcile(ctx, ctrl.Request{})
 		Expect(err).NotTo(HaveOccurred())
 		Expect(updates).To(HaveLen(1))
-		Expect(updates[0].GetStatus().GetState()).To(Equal(
+		Expect(updates[0].GetStatus().GetManagerState()).To(Equal(
 			privatev1.NetworkClassState_NETWORK_CLASS_STATE_FAILED))
-		Expect(updates[0].GetStatus().GetMessage()).To(ContainSubstring("invalid"))
+		Expect(updates[0].GetStatus().GetManagerMessage()).To(ContainSubstring("invalid"))
 	})
 
 	It("recovers a failed NetworkClass when its k8s manager is registered", func() {
@@ -279,8 +302,10 @@ var _ = Describe("NetworkClassCapabilitiesReconciler", func() {
 			FabricManager: ptr.To("fabric-caps-recovery"),
 			K8SManager:    &k8sManagerName,
 			Status: &privatev1.NetworkClassStatus{
-				State:   privatev1.NetworkClassState_NETWORK_CLASS_STATE_FAILED,
-				Message: ptr.To(`NetworkClass "nc-caps-recovery": resolving k8sManager "cudn_evpn": manager not found`),
+				State:          privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY,
+				Hub:            "hub-a",
+				ManagerState:   privatev1.NetworkClassState_NETWORK_CLASS_STATE_FAILED,
+				ManagerMessage: ptr.To(`NetworkClass "nc-caps-recovery": resolving k8sManager "cudn_evpn": manager not found`),
 			},
 		}
 		var updates []*privatev1.NetworkClass
@@ -293,7 +318,7 @@ var _ = Describe("NetworkClassCapabilitiesReconciler", func() {
 		_, err = reconciler.Reconcile(ctx, ctrl.Request{})
 		Expect(err).NotTo(HaveOccurred())
 		Expect(updates).To(HaveLen(1))
-		Expect(updates[0].GetStatus().GetState()).To(Equal(
+		Expect(updates[0].GetStatus().GetManagerState()).To(Equal(
 			privatev1.NetworkClassState_NETWORK_CLASS_STATE_FAILED))
 
 		k8sCM := newK8sManagerConfigMap("km-caps-recovery", namespace, "cudn_evpn", "ipv4")
@@ -304,9 +329,11 @@ var _ = Describe("NetworkClassCapabilitiesReconciler", func() {
 		_, err = reconciler.Reconcile(ctx, ctrl.Request{})
 		Expect(err).NotTo(HaveOccurred())
 		Expect(updates).To(HaveLen(1))
-		Expect(updates[0].GetStatus().GetState()).To(Equal(
+		Expect(updates[0].GetStatus().GetManagerState()).To(Equal(
 			privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY))
-		Expect(updates[0].GetStatus().HasMessage()).To(BeFalse())
+		Expect(updates[0].GetStatus().HasManagerMessage()).To(BeFalse())
+		Expect(updates[0].GetStatus().GetState()).To(Equal(privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY))
+		Expect(updates[0].GetStatus().GetHub()).To(Equal("hub-a"))
 	})
 
 	It("continues syncing other NetworkClasses when one fails to resolve", func() {
@@ -332,9 +359,9 @@ var _ = Describe("NetworkClassCapabilitiesReconciler", func() {
 		for _, update := range updates {
 			byID[update.GetId()] = update
 		}
-		Expect(byID["nc-caps-bad"].GetStatus().GetState()).To(Equal(
+		Expect(byID["nc-caps-bad"].GetStatus().GetManagerState()).To(Equal(
 			privatev1.NetworkClassState_NETWORK_CLASS_STATE_FAILED))
-		Expect(byID["nc-caps-good"].GetStatus().GetState()).To(Equal(
+		Expect(byID["nc-caps-good"].GetStatus().GetManagerState()).To(Equal(
 			privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY))
 	})
 
@@ -343,7 +370,8 @@ var _ = Describe("NetworkClassCapabilitiesReconciler", func() {
 			Id:            "nc-caps-transient",
 			FabricManager: ptr.To("fabric-caps-transient"),
 			Status: &privatev1.NetworkClassStatus{
-				State: privatev1.NetworkClassState_NETWORK_CLASS_STATE_PENDING,
+				State:        privatev1.NetworkClassState_NETWORK_CLASS_STATE_PENDING,
+				ManagerState: privatev1.NetworkClassState_NETWORK_CLASS_STATE_PENDING,
 			},
 		}
 		var updates []*privatev1.NetworkClass

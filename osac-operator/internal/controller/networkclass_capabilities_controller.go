@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/go-logr/logr"
+	"google.golang.org/protobuf/types/known/fieldmaskpb"
 	corev1 "k8s.io/api/core/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
@@ -151,86 +152,94 @@ func (r *NetworkClassCapabilitiesReconciler) syncOne(ctx context.Context, nc *pr
 		return nil
 	case networkmanager.IsManagerNotFound(err):
 		log.Info("network class references an unregistered manager", "networkClassID", nc.GetId(), "error", err)
-		newStatus := desiredNetworkClassStatus(nc, nil, err)
-		if networkClassStatusEqual(newStatus, nc.GetStatus()) {
+		newStatus := desiredNetworkClassManagerStatus(err)
+		if networkClassManagerStatusEqual(newStatus, nc.GetStatus()) {
 			return nil
 		}
-		nc.SetStatus(newStatus)
+		setNetworkClassManagerStatus(nc, newStatus)
 		_, updateErr := r.networkClassesClient.Update(ctx, privatev1.NetworkClassesUpdateRequest_builder{
 			Object: nc,
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{
+				"status.manager_state",
+				"status.manager_message",
+			}},
 		}.Build())
 		if updateErr != nil {
 			return fmt.Errorf("updating status for network class %q: %w", nc.GetId(), updateErr)
 		}
-		log.Info("updated network class status", "networkClassID", nc.GetId(),
-			"state", newStatus.GetState(), "message", newStatus.GetMessage())
+		log.Info("updated network class manager status", "networkClassID", nc.GetId(),
+			"state", newStatus.GetManagerState(), "message", newStatus.GetManagerMessage())
 		return nil
 	case err != nil:
 		return fmt.Errorf("resolving managers for network class %q: %w", nc.GetId(), err)
 	}
 
-	newStatus := desiredNetworkClassStatus(nc, resolved, nil)
+	newStatus := desiredNetworkClassManagerStatus(nil)
 	newCaps := nc.GetCapabilities()
 	if resolved.FabricManager != nil {
 		newCaps = computeCapabilities(resolved)
 	}
-	if capabilitiesEqual(newCaps, nc.GetCapabilities()) && networkClassStatusEqual(newStatus, nc.GetStatus()) {
+	if capabilitiesEqual(newCaps, nc.GetCapabilities()) && networkClassManagerStatusEqual(newStatus, nc.GetStatus()) {
 		return nil
 	}
 
 	if resolved.FabricManager != nil {
 		nc.SetCapabilities(newCaps)
 	}
-	nc.SetStatus(newStatus)
+	setNetworkClassManagerStatus(nc, newStatus)
 	_, err = r.networkClassesClient.Update(ctx, privatev1.NetworkClassesUpdateRequest_builder{
 		Object: nc,
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{
+			"capabilities",
+			"status.manager_state",
+			"status.manager_message",
+		}},
 	}.Build())
 	if err != nil {
 		return fmt.Errorf("updating network class %q: %w", nc.GetId(), err)
 	}
 
-	log.Info("updated network class", "networkClassID", nc.GetId(),
-		"state", newStatus.GetState(), "capabilities", newCaps)
+	log.Info("updated network class manager readiness", "networkClassID", nc.GetId(),
+		"state", newStatus.GetManagerState(), "capabilities", newCaps)
 	return nil
 }
 
-func desiredNetworkClassStatus(
-	nc *privatev1.NetworkClass,
-	resolved *dispatcher.ResolvedManagers,
-	resolveErr error,
-) *privatev1.NetworkClassStatus {
-	hub := ""
-	if current := nc.GetStatus(); current != nil {
-		hub = current.GetHub()
-	}
-
+func desiredNetworkClassManagerStatus(resolveErr error) *privatev1.NetworkClassStatus {
 	state := privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY
 	var message *string
 	if resolveErr != nil {
 		state = privatev1.NetworkClassState_NETWORK_CLASS_STATE_FAILED
 		failureMessage := resolveErr.Error()
 		message = &failureMessage
-	} else if resolved == nil {
-		state = privatev1.NetworkClassState_NETWORK_CLASS_STATE_FAILED
-		failureMessage := "manager resolution returned no managers"
-		message = &failureMessage
 	}
 
 	return privatev1.NetworkClassStatus_builder{
-		State:   state,
-		Message: message,
-		Hub:     hub,
+		ManagerState:   state,
+		ManagerMessage: message,
 	}.Build()
 }
 
-func networkClassStatusEqual(a, b *privatev1.NetworkClassStatus) bool {
+func setNetworkClassManagerStatus(networkClass *privatev1.NetworkClass, managerStatus *privatev1.NetworkClassStatus) {
+	status := networkClass.GetStatus()
+	if status == nil {
+		status = &privatev1.NetworkClassStatus{}
+		networkClass.SetStatus(status)
+	}
+	status.SetManagerState(managerStatus.GetManagerState())
+	if managerStatus.HasManagerMessage() {
+		status.SetManagerMessage(managerStatus.GetManagerMessage())
+	} else {
+		status.ClearManagerMessage()
+	}
+}
+
+func networkClassManagerStatusEqual(a, b *privatev1.NetworkClassStatus) bool {
 	if a == nil || b == nil {
 		return a == b
 	}
-	return a.GetState() == b.GetState() &&
-		a.GetHub() == b.GetHub() &&
-		a.HasMessage() == b.HasMessage() &&
-		a.GetMessage() == b.GetMessage()
+	return a.GetManagerState() == b.GetManagerState() &&
+		a.HasManagerMessage() == b.HasManagerMessage() &&
+		a.GetManagerMessage() == b.GetManagerMessage()
 }
 
 // computeCapabilities returns the capability intersection of the resolved fabric and

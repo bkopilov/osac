@@ -94,6 +94,8 @@ var _ = Describe("NetworkClass manager readiness", func() {
 			object := getResponse.GetObject()
 			g.Expect(object.GetStatus().GetState()).To(Equal(
 				privatev1.NetworkClassState_NETWORK_CLASS_STATE_FAILED))
+			g.Expect(object.GetStatus().GetManagerState()).To(Equal(
+				privatev1.NetworkClassState_NETWORK_CLASS_STATE_FAILED))
 			g.Expect(object.GetStatus().GetMessage()).To(ContainSubstring(k8sManagerName))
 		}, 2*time.Minute, time.Second).Should(Succeed())
 
@@ -109,7 +111,10 @@ var _ = Describe("NetworkClass manager readiness", func() {
 			object := getResponse.GetObject()
 			g.Expect(object.GetStatus().GetState()).To(Equal(
 				privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY))
+			g.Expect(object.GetStatus().GetManagerState()).To(Equal(
+				privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY))
 			g.Expect(object.GetStatus().HasMessage()).To(BeFalse())
+			g.Expect(object.GetStatus().HasManagerMessage()).To(BeFalse())
 			g.Expect(object.GetCapabilities().GetSupportsIpv4()).To(BeTrue())
 			g.Expect(object.GetCapabilities().GetSupportsIpv6()).To(BeFalse())
 			g.Expect(object.GetCapabilities().GetSupportsDualStack()).To(BeFalse())
