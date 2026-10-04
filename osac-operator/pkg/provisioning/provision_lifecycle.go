@@ -301,21 +301,13 @@ func runLifecycleCore(
 // JobTarget scopes one manager target (e.g. "fabric" or "k8s") within a
 // multi-target provisioning lifecycle run by RunMultiTargetProvisioningLifecycle.
 // Each target tracks its own job history (jobs tagged with a matching
-// JobStatus.Target). DependsOn optionally gates new attempts on a
-// prerequisite; unrelated targets continue to be driven independently.
+// JobStatus.Target). Dependency metadata is supplied separately to
+// RunMultiTargetProvisioningLifecycleWithDependencies.
 type JobTarget struct {
 	// Name tags jobs triggered for this target (JobStatus.Target) and scopes
 	// this target's own PollCallbacks. Must be non-empty and unique within a
 	// single RunMultiTargetProvisioningLifecycle call.
 	Name string
-
-	// DependsOn names the target that must have a successful provision job
-	// before this target may trigger or retry provisioning.
-	DependsOn string
-
-	// RequiredExtraVars lists prerequisite output keys passed to this target.
-	// Output keys not listed here are not inherited.
-	RequiredExtraVars []string
 
 	// Provider triggers/polls jobs for this target only.
 	Provider ProvisioningProvider
@@ -341,6 +333,17 @@ type JobTarget struct {
 	// sole target (see backfillLegacyJobTargets) — at most one target per
 	// call may set it.
 	AbsorbsLegacyHistory bool
+}
+
+// JobTargetDependency declares the prerequisite target and required outputs for a target.
+type JobTargetDependency struct {
+	// DependsOn names the target that must have a successful provision job
+	// before this target may trigger or retry provisioning.
+	DependsOn string
+
+	// RequiredExtraVars lists prerequisite output keys passed to this target.
+	// Output keys not listed here are not inherited.
+	RequiredExtraVars []string
 }
 
 // RunMultiTargetProvisioningLifecycle runs the same evaluate/trigger/poll/
@@ -371,7 +374,36 @@ func RunMultiTargetProvisioningLifecycle(
 	pollInterval time.Duration,
 	statusFlush func() error,
 ) (ctrl.Result, error) {
-	if err := validateJobTargets(targets); err != nil {
+	return runMultiTargetProvisioningLifecycle(ctx, targets, nil, resource, provState, maxHistory, pollInterval, statusFlush)
+}
+
+// RunMultiTargetProvisioningLifecycleWithDependencies runs a multi-target
+// provisioning lifecycle with prerequisite relationships keyed by target name.
+// Targets omitted from dependencies run independently.
+func RunMultiTargetProvisioningLifecycleWithDependencies(
+	ctx context.Context,
+	targets []JobTarget,
+	dependencies map[string]JobTargetDependency,
+	resource client.Object,
+	provState *State,
+	maxHistory int,
+	pollInterval time.Duration,
+	statusFlush func() error,
+) (ctrl.Result, error) {
+	return runMultiTargetProvisioningLifecycle(ctx, targets, dependencies, resource, provState, maxHistory, pollInterval, statusFlush)
+}
+
+func runMultiTargetProvisioningLifecycle(
+	ctx context.Context,
+	targets []JobTarget,
+	dependencies map[string]JobTargetDependency,
+	resource client.Object,
+	provState *State,
+	maxHistory int,
+	pollInterval time.Duration,
+	statusFlush func() error,
+) (ctrl.Result, error) {
+	if err := validateJobTargets(targets, dependencies); err != nil {
 		return ctrl.Result{}, err
 	}
 	backfillLegacyJobTargets(provState.Jobs, legacyHistoryOwnerForProvision(targets))
@@ -379,7 +411,7 @@ func RunMultiTargetProvisioningLifecycle(
 	for _, target := range targets {
 		targetsByName[target.Name] = target
 	}
-	orderedTargets := orderJobTargets(targets)
+	orderedTargets := orderJobTargets(targets, dependencies)
 
 	var (
 		errs         []error
@@ -389,11 +421,12 @@ func RunMultiTargetProvisioningLifecycle(
 
 	for _, t := range orderedTargets {
 		target := t
+		dependency := dependencies[target.Name]
 		var prepareTrigger func() (map[string]any, bool, time.Duration)
-		if target.DependsOn != "" {
-			prerequisite := targetsByName[target.DependsOn]
+		if dependency.DependsOn != "" {
+			prerequisite := targetsByName[dependency.DependsOn]
 			prepareTrigger = func() (map[string]any, bool, time.Duration) {
-				return prepareDependentTarget(ctx, target, prerequisite, resource, provState, pollInterval)
+				return prepareDependentTarget(ctx, target, dependency, prerequisite, resource, provState, pollInterval)
 			}
 		}
 		res, triggered, err := runLifecycleCore(ctx, t.Provider, resource, provState, t.Name, maxHistory, pollInterval, t.Callbacks, t.CheckAPIServer, prepareTrigger)
@@ -417,12 +450,12 @@ func RunMultiTargetProvisioningLifecycle(
 	return result, errors.Join(errs...)
 }
 
-// validateJobTargets rejects target lists that would make
+// validateJobTargets rejects target lists or dependency maps that would make
 // RunMultiTargetProvisioningLifecycle's per-target dispatch ambiguous or
 // impossible: at least one target, every target with a non-empty and unique
 // Name, a non-nil Provider and CheckAPIServer for each, valid dependency
 // references without cycles, and at most one target with AbsorbsLegacyHistory.
-func validateJobTargets(targets []JobTarget) error {
+func validateJobTargets(targets []JobTarget, dependencies map[string]JobTargetDependency) error {
 	if len(targets) == 0 {
 		return errors.New("at least one JobTarget is required")
 	}
@@ -442,11 +475,12 @@ func validateJobTargets(targets []JobTarget) error {
 		if t.CheckAPIServer == nil {
 			return fmt.Errorf("JobTarget %q: CheckAPIServer must not be nil", t.Name)
 		}
-		if len(t.RequiredExtraVars) > 0 && t.DependsOn == "" {
+		dependency := dependencies[t.Name]
+		if len(dependency.RequiredExtraVars) > 0 && dependency.DependsOn == "" {
 			return fmt.Errorf("JobTarget %q: RequiredExtraVars require DependsOn", t.Name)
 		}
-		seenKeys := make(map[string]struct{}, len(t.RequiredExtraVars))
-		for _, key := range t.RequiredExtraVars {
+		seenKeys := make(map[string]struct{}, len(dependency.RequiredExtraVars))
+		for _, key := range dependency.RequiredExtraVars {
 			if key == "" {
 				return fmt.Errorf("JobTarget %q: RequiredExtraVars must not contain an empty key", t.Name)
 			}
@@ -463,28 +497,34 @@ func validateJobTargets(targets []JobTarget) error {
 		}
 	}
 	for _, t := range targets {
-		if t.DependsOn == "" {
+		dependency := dependencies[t.Name]
+		if dependency.DependsOn == "" {
 			continue
 		}
-		if t.DependsOn == t.Name {
+		if dependency.DependsOn == t.Name {
 			return fmt.Errorf("JobTarget %q cannot depend on itself", t.Name)
 		}
-		if _, ok := seen[t.DependsOn]; !ok {
-			return fmt.Errorf("JobTarget %q has unknown dependency %q", t.Name, t.DependsOn)
+		if _, ok := seen[dependency.DependsOn]; !ok {
+			return fmt.Errorf("JobTarget %q has unknown dependency %q", t.Name, dependency.DependsOn)
 		}
 	}
-	if _, err := orderJobTargetsChecked(targets); err != nil {
+	for targetName := range dependencies {
+		if _, ok := seen[targetName]; !ok {
+			return fmt.Errorf("dependency references unknown JobTarget %q", targetName)
+		}
+	}
+	if _, err := orderJobTargetsChecked(targets, dependencies); err != nil {
 		return err
 	}
 	return nil
 }
 
-func orderJobTargets(targets []JobTarget) []JobTarget {
-	ordered, _ := orderJobTargetsChecked(targets)
+func orderJobTargets(targets []JobTarget, dependencies map[string]JobTargetDependency) []JobTarget {
+	ordered, _ := orderJobTargetsChecked(targets, dependencies)
 	return ordered
 }
 
-func orderJobTargetsChecked(targets []JobTarget) ([]JobTarget, error) {
+func orderJobTargetsChecked(targets []JobTarget, dependencies map[string]JobTargetDependency) ([]JobTarget, error) {
 	targetsByName := make(map[string]JobTarget, len(targets))
 	for _, target := range targets {
 		targetsByName[target.Name] = target
@@ -501,8 +541,8 @@ func orderJobTargetsChecked(targets []JobTarget) ([]JobTarget, error) {
 		}
 		states[name] = 1
 		target := targetsByName[name]
-		if target.DependsOn != "" {
-			if err := visit(target.DependsOn); err != nil {
+		if dependency := dependencies[target.Name]; dependency.DependsOn != "" {
+			if err := visit(dependency.DependsOn); err != nil {
 				return err
 			}
 		}
@@ -521,6 +561,7 @@ func orderJobTargetsChecked(targets []JobTarget) ([]JobTarget, error) {
 func prepareDependentTarget(
 	ctx context.Context,
 	target JobTarget,
+	dependency JobTargetDependency,
 	prerequisite JobTarget,
 	resource client.Object,
 	provState *State,
@@ -540,15 +581,16 @@ func prepareDependentTarget(
 	if dependencyJob.ConfigVersion != "" && dependencyJob.ConfigVersion != provState.DesiredConfigVersion {
 		return nil, false, 0
 	}
-	if len(target.RequiredExtraVars) == 0 {
+	if len(dependency.RequiredExtraVars) == 0 {
 		return nil, true, 0
 	}
-	return prepareDependentTargetOutputVars(ctx, target, prerequisite, resource, dependencyJob, provState, pollInterval)
+	return prepareDependentTargetOutputVars(ctx, target, dependency, prerequisite, resource, dependencyJob, provState, pollInterval)
 }
 
 func prepareDependentTargetOutputVars(
 	ctx context.Context,
 	target JobTarget,
+	dependency JobTargetDependency,
 	prerequisite JobTarget,
 	resource client.Object,
 	dependencyJob *v1alpha1.JobStatus,
@@ -593,8 +635,8 @@ func prepareDependentTargetOutputVars(
 	}
 
 	var missing []string
-	inheritedExtraVars := make(map[string]any, len(target.RequiredExtraVars))
-	for _, key := range target.RequiredExtraVars {
+	inheritedExtraVars := make(map[string]any, len(dependency.RequiredExtraVars))
+	for _, key := range dependency.RequiredExtraVars {
 		value, found := status.ExtraVars[key]
 		if !found || value == nil {
 			missing = append(missing, key)

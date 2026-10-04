@@ -296,6 +296,21 @@ var _ = Describe("AAPProvider", func() {
 			Expect(launchedExtraVars).To(HaveKey("osac_job_vars"))
 			Expect(inherited).To(Equal(map[string]any{"l2_vni": 14, "l3_vni": 11}))
 		})
+
+		It("prefers inherited outputs when a key conflicts with generated vars", func() {
+			var launchedExtraVars map[string]any
+			aapClient.launchJobTemplateFunc = func(_ context.Context, req aap.LaunchJobTemplateRequest) (*aap.LaunchJobTemplateResponse, error) {
+				launchedExtraVars = req.ExtraVars
+				return &aap.LaunchJobTemplateResponse{JobID: 123}, nil
+			}
+
+			resource := &v1alpha1.ComputeInstance{ObjectMeta: metav1.ObjectMeta{Name: "vm", Namespace: "tenant"}}
+			inherited := map[string]any{"osac_job_vars": map[string]any{"source": "fabric"}}
+			_, err := provider.TriggerProvisionWithExtraVars(ctx, resource, inherited)
+
+			Expect(err).NotTo(HaveOccurred())
+			Expect(launchedExtraVars).To(HaveKeyWithValue("osac_job_vars", inherited["osac_job_vars"]))
+		})
 	})
 
 	Describe("GetProvisionStatus", func() {

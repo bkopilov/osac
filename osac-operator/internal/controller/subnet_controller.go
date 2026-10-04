@@ -620,18 +620,21 @@ func (r *SubnetReconciler) handleProvisioning(ctx context.Context, subnet *v1alp
 				AbsorbsLegacyHistory: true,
 			},
 		}
+		dependencies := map[string]provisioning.JobTargetDependency{}
 		if k8sTarget != nil {
 			targets = append(targets, provisioning.JobTarget{
-				Name:              k8sName,
-				Provider:          newDispatchTargetProvider(r.ProvisioningProvider, k8sTarget.Manager.Name),
+				Name:           k8sName,
+				Provider:       newDispatchTargetProvider(r.ProvisioningProvider, k8sTarget.Manager.Name),
+				Callbacks:      &provisioning.PollCallbacks{OnFailed: onFailedFor(k8sName), OnSuccess: onSuccess},
+				CheckAPIServer: checkAPIServerFor(k8sName),
+			})
+			dependencies[k8sName] = provisioning.JobTargetDependency{
 				DependsOn:         fabricName,
 				RequiredExtraVars: []string{"l2_vni", "l3_vni"},
-				Callbacks:         &provisioning.PollCallbacks{OnFailed: onFailedFor(k8sName), OnSuccess: onSuccess},
-				CheckAPIServer:    checkAPIServerFor(k8sName),
-			})
+			}
 		}
 
-		result, err = provisioning.RunMultiTargetProvisioningLifecycle(ctx, targets, subnet,
+		result, err = provisioning.RunMultiTargetProvisioningLifecycleWithDependencies(ctx, targets, dependencies, subnet,
 			&provisioning.State{Jobs: &subnet.Status.ProvisioningJobs, DesiredConfigVersion: subnet.Status.DesiredConfigVersion},
 			r.MaxJobHistory, r.StatusPollInterval,
 			func() error {

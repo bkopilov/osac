@@ -313,10 +313,10 @@ var _ = ginkgo.Describe("RunMultiTargetProvisioningLifecycle", func() {
 		jobs := []v1alpha1.JobStatus{}
 		provState := &State{Jobs: &jobs, DesiredConfigVersion: "v1"}
 
-		result, err := RunMultiTargetProvisioningLifecycle(ctx, []JobTarget{
-			{Name: "k8s", Provider: k8sProvider, DependsOn: "fabric", RequiredExtraVars: []string{"l2_vni"}, CheckAPIServer: noAPIServerJob},
+		result, err := RunMultiTargetProvisioningLifecycleWithDependencies(ctx, []JobTarget{
+			{Name: "k8s", Provider: k8sProvider, CheckAPIServer: noAPIServerJob},
 			{Name: "fabric", Provider: fabricProvider, CheckAPIServer: noAPIServerJob},
-		}, &v1alpha1.Subnet{}, provState, 5, 30*time.Second, nil)
+		}, map[string]JobTargetDependency{"k8s": {DependsOn: "fabric", RequiredExtraVars: []string{"l2_vni"}}}, &v1alpha1.Subnet{}, provState, 5, 30*time.Second, nil)
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(result.RequeueAfter).To(Equal(30 * time.Second))
@@ -343,10 +343,10 @@ var _ = ginkgo.Describe("RunMultiTargetProvisioningLifecycle", func() {
 		}}
 		provState := &State{Jobs: &jobs, DesiredConfigVersion: "v1"}
 
-		result, err := RunMultiTargetProvisioningLifecycle(ctx, []JobTarget{
+		result, err := RunMultiTargetProvisioningLifecycleWithDependencies(ctx, []JobTarget{
 			{Name: "fabric", Provider: fabricProvider, CheckAPIServer: noAPIServerJob},
-			{Name: "k8s", Provider: k8sProvider, DependsOn: "fabric", CheckAPIServer: noAPIServerJob},
-		}, &v1alpha1.Subnet{}, provState, 5, 30*time.Second, nil)
+			{Name: "k8s", Provider: k8sProvider, CheckAPIServer: noAPIServerJob},
+		}, map[string]JobTargetDependency{"k8s": {DependsOn: "fabric"}}, &v1alpha1.Subnet{}, provState, 5, 30*time.Second, nil)
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(result.RequeueAfter).To(Equal(30 * time.Second))
@@ -377,10 +377,10 @@ var _ = ginkgo.Describe("RunMultiTargetProvisioningLifecycle", func() {
 		}}
 		provState := &State{Jobs: &jobs, DesiredConfigVersion: "v1"}
 
-		_, err := RunMultiTargetProvisioningLifecycle(ctx, []JobTarget{
-			{Name: "k8s", Provider: k8sProvider, DependsOn: "fabric", RequiredExtraVars: []string{"l2_vni"}, CheckAPIServer: noAPIServerJob},
+		_, err := RunMultiTargetProvisioningLifecycleWithDependencies(ctx, []JobTarget{
+			{Name: "k8s", Provider: k8sProvider, CheckAPIServer: noAPIServerJob},
 			{Name: "fabric", Provider: fabricProvider, CheckAPIServer: noAPIServerJob},
-		}, &v1alpha1.Subnet{}, provState, 5, 30*time.Second, nil)
+		}, map[string]JobTargetDependency{"k8s": {DependsOn: "fabric", RequiredExtraVars: []string{"l2_vni"}}}, &v1alpha1.Subnet{}, provState, 5, 30*time.Second, nil)
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(launchedVars).To(Equal(map[string]any{"l2_vni": 14}))
@@ -415,10 +415,10 @@ var _ = ginkgo.Describe("RunMultiTargetProvisioningLifecycle", func() {
 		}}
 		provState := &State{Jobs: &jobs, DesiredConfigVersion: "v1"}
 
-		result, err := RunMultiTargetProvisioningLifecycle(ctx, []JobTarget{
+		result, err := RunMultiTargetProvisioningLifecycleWithDependencies(ctx, []JobTarget{
 			{Name: "fabric", Provider: fabricProvider, CheckAPIServer: noAPIServerJob},
-			{Name: "k8s", Provider: k8sProvider, DependsOn: "fabric", RequiredExtraVars: []string{"l2_vni"}, CheckAPIServer: noAPIServerJob},
-		}, &v1alpha1.Subnet{}, provState, 5, 30*time.Second, nil)
+			{Name: "k8s", Provider: k8sProvider, CheckAPIServer: noAPIServerJob},
+		}, map[string]JobTargetDependency{"k8s": {DependsOn: "fabric", RequiredExtraVars: []string{"l2_vni"}}}, &v1alpha1.Subnet{}, provState, 5, 30*time.Second, nil)
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(result.RequeueAfter).To(Equal(45 * time.Second))
@@ -441,10 +441,10 @@ var _ = ginkgo.Describe("RunMultiTargetProvisioningLifecycle", func() {
 		}}
 		provState := &State{Jobs: &jobs, DesiredConfigVersion: "v1"}
 
-		_, err := RunMultiTargetProvisioningLifecycle(ctx, []JobTarget{
+		_, err := RunMultiTargetProvisioningLifecycleWithDependencies(ctx, []JobTarget{
 			{Name: "fabric", Provider: &mockProvider{}, CheckAPIServer: noAPIServerJob},
-			{Name: "k8s", Provider: k8sProvider, DependsOn: "fabric", Callbacks: &PollCallbacks{OnFailed: func(message string) { failureMessage = message }}, CheckAPIServer: noAPIServerJob},
-		}, &v1alpha1.Subnet{}, provState, 5, 30*time.Second, nil)
+			{Name: "k8s", Provider: k8sProvider, Callbacks: &PollCallbacks{OnFailed: func(message string) { failureMessage = message }}, CheckAPIServer: noAPIServerJob},
+		}, map[string]JobTargetDependency{"k8s": {DependsOn: "fabric"}}, &v1alpha1.Subnet{}, provState, 5, 30*time.Second, nil)
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(k8sTriggerCalled).To(BeFalse())
@@ -475,10 +475,10 @@ var _ = ginkgo.Describe("RunMultiTargetProvisioningLifecycle", func() {
 		}}
 		provState := &State{Jobs: &jobs, DesiredConfigVersion: "v1"}
 
-		_, err := RunMultiTargetProvisioningLifecycle(ctx, []JobTarget{
+		_, err := RunMultiTargetProvisioningLifecycleWithDependencies(ctx, []JobTarget{
 			{Name: "fabric", Provider: fabricProvider, CheckAPIServer: noAPIServerJob},
-			{Name: "k8s", Provider: k8sProvider, DependsOn: "fabric", RequiredExtraVars: []string{"l2_vni", "l3_vni"}, Callbacks: &PollCallbacks{OnFailed: func(message string) { failureMessage = message }}, CheckAPIServer: noAPIServerJob},
-		}, &v1alpha1.Subnet{}, provState, 5, 30*time.Second, nil)
+			{Name: "k8s", Provider: k8sProvider, Callbacks: &PollCallbacks{OnFailed: func(message string) { failureMessage = message }}, CheckAPIServer: noAPIServerJob},
+		}, map[string]JobTargetDependency{"k8s": {DependsOn: "fabric", RequiredExtraVars: []string{"l2_vni", "l3_vni"}}}, &v1alpha1.Subnet{}, provState, 5, 30*time.Second, nil)
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(k8sTriggerCalled).To(BeFalse())
@@ -505,10 +505,10 @@ var _ = ginkgo.Describe("RunMultiTargetProvisioningLifecycle", func() {
 		}}
 		provState := &State{Jobs: &jobs, DesiredConfigVersion: "v1"}
 
-		_, err := RunMultiTargetProvisioningLifecycle(ctx, []JobTarget{
+		_, err := RunMultiTargetProvisioningLifecycleWithDependencies(ctx, []JobTarget{
 			{Name: "fabric", Provider: fabricProvider, CheckAPIServer: noAPIServerJob},
-			{Name: "k8s", Provider: k8sProvider, DependsOn: "fabric", RequiredExtraVars: []string{"l2_vni"}, Callbacks: &PollCallbacks{OnFailed: func(message string) { failureMessage = message }}, CheckAPIServer: noAPIServerJob},
-		}, &v1alpha1.Subnet{}, provState, 5, 30*time.Second, nil)
+			{Name: "k8s", Provider: k8sProvider, Callbacks: &PollCallbacks{OnFailed: func(message string) { failureMessage = message }}, CheckAPIServer: noAPIServerJob},
+		}, map[string]JobTargetDependency{"k8s": {DependsOn: "fabric", RequiredExtraVars: []string{"l2_vni"}}}, &v1alpha1.Subnet{}, provState, 5, 30*time.Second, nil)
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(k8sTriggerCalled).To(BeFalse())
@@ -536,10 +536,10 @@ var _ = ginkgo.Describe("RunMultiTargetProvisioningLifecycle", func() {
 		}}
 		provState := &State{Jobs: &jobs, DesiredConfigVersion: "v1"}
 
-		result, err := RunMultiTargetProvisioningLifecycle(ctx, []JobTarget{
+		result, err := RunMultiTargetProvisioningLifecycleWithDependencies(ctx, []JobTarget{
 			{Name: "fabric", Provider: fabricProvider, CheckAPIServer: noAPIServerJob},
-			{Name: "k8s", Provider: k8sProvider, DependsOn: "fabric", RequiredExtraVars: []string{"l2_vni"}, CheckAPIServer: noAPIServerJob},
-		}, &v1alpha1.Subnet{}, provState, 5, 30*time.Second, nil)
+			{Name: "k8s", Provider: k8sProvider, CheckAPIServer: noAPIServerJob},
+		}, map[string]JobTargetDependency{"k8s": {DependsOn: "fabric", RequiredExtraVars: []string{"l2_vni"}}}, &v1alpha1.Subnet{}, provState, 5, 30*time.Second, nil)
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(result.RequeueAfter).To(Equal(30 * time.Second))
@@ -571,10 +571,10 @@ var _ = ginkgo.Describe("RunMultiTargetProvisioningLifecycle", func() {
 		}}
 		provState := &State{Jobs: &jobs, DesiredConfigVersion: "v1"}
 
-		result, err := RunMultiTargetProvisioningLifecycle(ctx, []JobTarget{
+		result, err := RunMultiTargetProvisioningLifecycleWithDependencies(ctx, []JobTarget{
 			{Name: "fabric", Provider: fabricProvider, Callbacks: &PollCallbacks{OnFailed: func(message string) { prerequisiteFailureMessage = message }}, CheckAPIServer: noAPIServerJob},
-			{Name: "k8s", Provider: k8sProvider, DependsOn: "fabric", RequiredExtraVars: []string{"l2_vni"}, Callbacks: &PollCallbacks{OnFailed: func(message string) { targetFailureMessage = message }}, CheckAPIServer: noAPIServerJob},
-		}, &v1alpha1.Subnet{}, provState, 5, 30*time.Second, nil)
+			{Name: "k8s", Provider: k8sProvider, Callbacks: &PollCallbacks{OnFailed: func(message string) { targetFailureMessage = message }}, CheckAPIServer: noAPIServerJob},
+		}, map[string]JobTargetDependency{"k8s": {DependsOn: "fabric", RequiredExtraVars: []string{"l2_vni"}}}, &v1alpha1.Subnet{}, provState, 5, 30*time.Second, nil)
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(result.RequeueAfter).To(Equal(30 * time.Second))
@@ -598,10 +598,10 @@ var _ = ginkgo.Describe("RunMultiTargetProvisioningLifecycle", func() {
 		}}
 		provState := &State{Jobs: &jobs, DesiredConfigVersion: "v1"}
 
-		_, err := RunMultiTargetProvisioningLifecycle(ctx, []JobTarget{
+		_, err := RunMultiTargetProvisioningLifecycleWithDependencies(ctx, []JobTarget{
 			{Name: "fabric", Provider: &mockProvider{}, CheckAPIServer: noAPIServerJob},
-			{Name: "k8s", Provider: k8sProvider, DependsOn: "fabric", RequiredExtraVars: []string{"l2_vni"}, Callbacks: &PollCallbacks{OnFailed: func(message string) { failureMessage = message }}, CheckAPIServer: noAPIServerJob},
-		}, &v1alpha1.Subnet{}, provState, 5, 30*time.Second, nil)
+			{Name: "k8s", Provider: k8sProvider, Callbacks: &PollCallbacks{OnFailed: func(message string) { failureMessage = message }}, CheckAPIServer: noAPIServerJob},
+		}, map[string]JobTargetDependency{"k8s": {DependsOn: "fabric", RequiredExtraVars: []string{"l2_vni"}}}, &v1alpha1.Subnet{}, provState, 5, 30*time.Second, nil)
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(k8sTriggerCalled).To(BeFalse())
@@ -632,10 +632,10 @@ var _ = ginkgo.Describe("RunMultiTargetProvisioningLifecycle", func() {
 		}}
 		provState := &State{Jobs: &jobs, DesiredConfigVersion: "v1"}
 
-		_, err := RunMultiTargetProvisioningLifecycle(ctx, []JobTarget{
+		_, err := RunMultiTargetProvisioningLifecycleWithDependencies(ctx, []JobTarget{
 			{Name: "fabric", Provider: fabricProvider, CheckAPIServer: noAPIServerJob},
-			{Name: "k8s", Provider: k8sProvider, DependsOn: "fabric", RequiredExtraVars: []string{"l2_vni"}, Callbacks: &PollCallbacks{OnFailed: func(message string) { failureMessage = message }}, CheckAPIServer: noAPIServerJob},
-		}, &v1alpha1.Subnet{}, provState, 5, 30*time.Second, nil)
+			{Name: "k8s", Provider: k8sProvider, Callbacks: &PollCallbacks{OnFailed: func(message string) { failureMessage = message }}, CheckAPIServer: noAPIServerJob},
+		}, map[string]JobTargetDependency{"k8s": {DependsOn: "fabric", RequiredExtraVars: []string{"l2_vni"}}}, &v1alpha1.Subnet{}, provState, 5, 30*time.Second, nil)
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(k8sTriggerCalled).To(BeFalse())
@@ -656,10 +656,10 @@ var _ = ginkgo.Describe("RunMultiTargetProvisioningLifecycle", func() {
 		}}
 		provState := &State{Jobs: &jobs, DesiredConfigVersion: "v1"}
 
-		_, err := RunMultiTargetProvisioningLifecycle(ctx, []JobTarget{
+		_, err := RunMultiTargetProvisioningLifecycleWithDependencies(ctx, []JobTarget{
 			{Name: "fabric", Provider: &mockProvider{}, CheckAPIServer: noAPIServerJob},
-			{Name: "k8s", Provider: k8sProvider, DependsOn: "fabric", CheckAPIServer: noAPIServerJob},
-		}, &v1alpha1.Subnet{}, provState, 5, 30*time.Second, nil)
+			{Name: "k8s", Provider: k8sProvider, CheckAPIServer: noAPIServerJob},
+		}, map[string]JobTargetDependency{"k8s": {DependsOn: "fabric"}}, &v1alpha1.Subnet{}, provState, 5, 30*time.Second, nil)
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(k8sTriggerCalled).To(BeTrue())
@@ -943,29 +943,50 @@ var _ = ginkgo.Describe("RunMultiTargetProvisioningLifecycle", func() {
 	ginkgo.It("returns an error when a target depends on a missing target", func() {
 		jobs := []v1alpha1.JobStatus{}
 		provState := &State{Jobs: &jobs, DesiredConfigVersion: "v1"}
-		_, err := RunMultiTargetProvisioningLifecycle(ctx, []JobTarget{
-			{Name: "k8s", Provider: &mockProvider{}, DependsOn: "fabric", CheckAPIServer: noAPIServerJob},
-		}, &v1alpha1.Subnet{}, provState, 5, 30*time.Second, nil)
+		_, err := RunMultiTargetProvisioningLifecycleWithDependencies(ctx, []JobTarget{
+			{Name: "k8s", Provider: &mockProvider{}, CheckAPIServer: noAPIServerJob},
+		}, map[string]JobTargetDependency{"k8s": {DependsOn: "fabric"}}, &v1alpha1.Subnet{}, provState, 5, 30*time.Second, nil)
 		Expect(err).To(MatchError(ContainSubstring("unknown dependency")))
 	})
 
 	ginkgo.It("returns an error when a target depends on itself", func() {
 		jobs := []v1alpha1.JobStatus{}
 		provState := &State{Jobs: &jobs, DesiredConfigVersion: "v1"}
-		_, err := RunMultiTargetProvisioningLifecycle(ctx, []JobTarget{
-			{Name: "fabric", Provider: &mockProvider{}, DependsOn: "fabric", CheckAPIServer: noAPIServerJob},
-		}, &v1alpha1.Subnet{}, provState, 5, 30*time.Second, nil)
+		_, err := RunMultiTargetProvisioningLifecycleWithDependencies(ctx, []JobTarget{
+			{Name: "fabric", Provider: &mockProvider{}, CheckAPIServer: noAPIServerJob},
+		}, map[string]JobTargetDependency{"fabric": {DependsOn: "fabric"}}, &v1alpha1.Subnet{}, provState, 5, 30*time.Second, nil)
 		Expect(err).To(MatchError(ContainSubstring("cannot depend on itself")))
 	})
 
 	ginkgo.It("returns an error when target dependencies contain a cycle", func() {
 		jobs := []v1alpha1.JobStatus{}
 		provState := &State{Jobs: &jobs, DesiredConfigVersion: "v1"}
-		_, err := RunMultiTargetProvisioningLifecycle(ctx, []JobTarget{
-			{Name: "fabric", Provider: &mockProvider{}, DependsOn: "k8s", CheckAPIServer: noAPIServerJob},
-			{Name: "k8s", Provider: &mockProvider{}, DependsOn: "fabric", CheckAPIServer: noAPIServerJob},
+		_, err := RunMultiTargetProvisioningLifecycleWithDependencies(ctx, []JobTarget{
+			{Name: "fabric", Provider: &mockProvider{}, CheckAPIServer: noAPIServerJob},
+			{Name: "k8s", Provider: &mockProvider{}, CheckAPIServer: noAPIServerJob},
+		}, map[string]JobTargetDependency{
+			"fabric": {DependsOn: "k8s"},
+			"k8s":    {DependsOn: "fabric"},
 		}, &v1alpha1.Subnet{}, provState, 5, 30*time.Second, nil)
 		Expect(err).To(MatchError(ContainSubstring("dependency cycle")))
+	})
+
+	ginkgo.It("returns an error when dependency metadata names an unknown target", func() {
+		jobs := []v1alpha1.JobStatus{}
+		provState := &State{Jobs: &jobs, DesiredConfigVersion: "v1"}
+		_, err := RunMultiTargetProvisioningLifecycleWithDependencies(ctx, []JobTarget{
+			{Name: "fabric", Provider: &mockProvider{}, CheckAPIServer: noAPIServerJob},
+		}, map[string]JobTargetDependency{"unknown": {DependsOn: "fabric"}}, &v1alpha1.Subnet{}, provState, 5, 30*time.Second, nil)
+		Expect(err).To(MatchError(ContainSubstring("dependency references unknown JobTarget")))
+	})
+
+	ginkgo.It("requires a prerequisite when required output variables are configured", func() {
+		jobs := []v1alpha1.JobStatus{}
+		provState := &State{Jobs: &jobs, DesiredConfigVersion: "v1"}
+		_, err := RunMultiTargetProvisioningLifecycleWithDependencies(ctx, []JobTarget{
+			{Name: "k8s", Provider: &mockProvider{}, CheckAPIServer: noAPIServerJob},
+		}, map[string]JobTargetDependency{"k8s": {RequiredExtraVars: []string{"l2_vni"}}}, &v1alpha1.Subnet{}, provState, 5, 30*time.Second, nil)
+		Expect(err).To(MatchError(ContainSubstring("RequiredExtraVars require DependsOn")))
 	})
 
 	ginkgo.It("returns an error when more than one target sets AbsorbsLegacyHistory", func() {
