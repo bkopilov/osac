@@ -1017,6 +1017,52 @@ var _ = Describe("SubnetReconciler", func() {
 			Expect(cond).NotTo(BeNil())
 			Expect(cond.Status).To(Equal(metav1.ConditionTrue))
 			Expect(cond.Reason).To(Equal(osacv1alpha1.ReasonAsExpected))
+			Expect(subnet.Status.L2VNI).To(BeNil())
+		})
+
+		It("stores the L2 VNI returned by the successful AAP job", func() {
+			subnet.Status.ProvisioningJobs = []osacv1alpha1.JobStatus{{
+				JobID:     "vni-job",
+				Type:      osacv1alpha1.JobTypeProvision,
+				State:     osacv1alpha1.JobStateRunning,
+				Timestamp: metav1.NewTime(time.Now().UTC()),
+			}}
+			mockProvider.getProvisionStatusWithExtraVarsFunc = func(_ context.Context, _ client.Object, jobID string) (provisioning.ProvisionStatusWithExtraVars, error) {
+				return provisioning.ProvisionStatusWithExtraVars{
+					ProvisionStatus: provisioning.ProvisionStatus{JobID: jobID, State: osacv1alpha1.JobStateSucceeded},
+					ExtraVars:       map[string]any{"l2_vni": float64(4096), "l3_vni": float64(8192)},
+				}, nil
+			}
+
+			_, err := reconciler.handleProvisioning(ctx, subnet, nil)
+
+			Expect(err).NotTo(HaveOccurred())
+			Expect(subnet.Status.L2VNI).NotTo(BeNil())
+			Expect(*subnet.Status.L2VNI).To(Equal(int32(4096)))
+			Expect(subnet.Status.Phase).To(Equal(osacv1alpha1.SubnetPhaseReady))
+		})
+
+		It("clears a previously stored L2 VNI when the successful job omits it", func() {
+			previousVNI := int32(4096)
+			subnet.Status.L2VNI = &previousVNI
+			subnet.Status.ProvisioningJobs = []osacv1alpha1.JobStatus{{
+				JobID:     "vni-job-without-output",
+				Type:      osacv1alpha1.JobTypeProvision,
+				State:     osacv1alpha1.JobStateRunning,
+				Timestamp: metav1.NewTime(time.Now().UTC()),
+			}}
+			mockProvider.getProvisionStatusWithExtraVarsFunc = func(_ context.Context, _ client.Object, jobID string) (provisioning.ProvisionStatusWithExtraVars, error) {
+				return provisioning.ProvisionStatusWithExtraVars{
+					ProvisionStatus: provisioning.ProvisionStatus{JobID: jobID, State: osacv1alpha1.JobStateSucceeded},
+					ExtraVars:       map[string]any{},
+				}, nil
+			}
+
+			_, err := reconciler.handleProvisioning(ctx, subnet, nil)
+
+			Expect(err).NotTo(HaveOccurred())
+			Expect(subnet.Status.L2VNI).To(BeNil())
+			Expect(subnet.Status.Phase).To(Equal(osacv1alpha1.SubnetPhaseReady))
 		})
 
 		It("should clear stale Ready=False condition on provisioning recovery", func() {
@@ -1092,7 +1138,7 @@ var _ = Describe("SubnetReconciler", func() {
 			subnet.Status.DesiredConfigVersion = testConfigVersion
 			subnet.Status.ProvisioningJobs = []osacv1alpha1.JobStatus{{
 				JobID: "fabric-1", Type: osacv1alpha1.JobTypeProvision, Target: string(dispatcher.ManagerRoleFabric),
-				State: osacv1alpha1.JobStateSucceeded, ConfigVersion: testConfigVersion, Timestamp: metav1.NewTime(time.Now().UTC()),
+				State: osacv1alpha1.JobStateRunning, ConfigVersion: testConfigVersion, Timestamp: metav1.NewTime(time.Now().UTC()),
 			}}
 			mockProvider.getProvisionStatusWithExtraVarsFunc = func(_ context.Context, _ client.Object, jobID string) (provisioning.ProvisionStatusWithExtraVars, error) {
 				return provisioning.ProvisionStatusWithExtraVars{
@@ -1113,6 +1159,8 @@ var _ = Describe("SubnetReconciler", func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(seenAnnotation).To(Equal("cudn_net"))
 			Expect(seenExtraVars).To(Equal(map[string]any{"l2_vni": 14, "l3_vni": 11}))
+			Expect(subnet.Status.L2VNI).NotTo(BeNil())
+			Expect(*subnet.Status.L2VNI).To(Equal(int32(14)))
 			Expect(provisioning.FindLatestJobByTypeAndTarget(subnet.Status.ProvisioningJobs, osacv1alpha1.JobTypeProvision, string(dispatcher.ManagerRoleK8s))).NotTo(BeNil())
 		})
 

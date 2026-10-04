@@ -559,13 +559,25 @@ func (r *SubnetReconciler) handleProvisioning(ctx context.Context, subnet *v1alp
 		// VirtualNetwork spec's annotation rather than a resolved DispatchPlan. Job
 		// history for these Subnets has always been untargeted, so keep using the
 		// fully single-target lifecycle unchanged.
+		onProvisioningFailure := func(message string) {
+			subnet.Status.Phase = v1alpha1.SubnetPhaseFailed
+			setReadyConditionFailed(&subnet.Status.Conditions, message)
+		}
 		result, err = provisioning.RunProvisioningLifecycle(ctx, r.ProvisioningProvider, subnet,
 			&provisioning.State{Jobs: &subnet.Status.ProvisioningJobs, DesiredConfigVersion: subnet.Status.DesiredConfigVersion},
 			r.MaxJobHistory, r.StatusPollInterval,
 			&provisioning.PollCallbacks{
-				OnFailed: func(message string) {
-					subnet.Status.Phase = v1alpha1.SubnetPhaseFailed
-					setReadyConditionFailed(&subnet.Status.Conditions, message)
+				OnFailed:      onProvisioningFailure,
+				OnOutputError: onProvisioningFailure,
+				OnSuccessWithExtraVars: func(status provisioning.ProvisionStatusWithExtraVars) error {
+					vnis, err := provisioning.ParseFabricVNIs(status.ExtraVars)
+					if err != nil {
+						return err
+					}
+					if !equality.Semantic.DeepEqual(subnet.Status.L2VNI, vnis.L2VNI) {
+						subnet.Status.L2VNI = vnis.L2VNI
+					}
+					return nil
 				},
 				OnSuccess: func(_ provisioning.ProvisionStatus) {
 					subnet.Status.Phase = v1alpha1.SubnetPhaseReady
@@ -608,11 +620,26 @@ func (r *SubnetReconciler) handleProvisioning(ctx context.Context, subnet *v1alp
 			}
 		}
 
+		fabricCallbacks := &provisioning.PollCallbacks{
+			OnFailed:      onFailedFor(fabricName),
+			OnOutputError: onFailedFor(fabricName),
+			OnSuccessWithExtraVars: func(status provisioning.ProvisionStatusWithExtraVars) error {
+				vnis, err := provisioning.ParseFabricVNIs(status.ExtraVars)
+				if err != nil {
+					return err
+				}
+				if !equality.Semantic.DeepEqual(subnet.Status.L2VNI, vnis.L2VNI) {
+					subnet.Status.L2VNI = vnis.L2VNI
+				}
+				return nil
+			},
+			OnSuccess: onSuccess,
+		}
 		targets := []provisioning.JobTarget{
 			{
 				Name:           fabricName,
 				Provider:       newDispatchTargetProvider(r.ProvisioningProvider, fabricTarget.Manager.Name),
-				Callbacks:      &provisioning.PollCallbacks{OnFailed: onFailedFor(fabricName), OnSuccess: onSuccess},
+				Callbacks:      fabricCallbacks,
 				CheckAPIServer: checkAPIServerFor(fabricName),
 				// Subnet was fabric-only (single, untargeted job history) before the
 				// dispatcher path existed, so fabric inherits any pre-existing
