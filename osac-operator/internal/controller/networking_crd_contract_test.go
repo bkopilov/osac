@@ -20,6 +20,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/osac-project/osac/osac-operator/api/v1alpha1"
@@ -34,6 +35,62 @@ func expectCRDCreateRejected(object client.Object) {
 }
 
 var _ = Describe("IPv4-only networking CRD contracts", func() {
+	It("preserves valid VNIs in resource status and rejects values outside the VXLAN range", func() {
+		virtualNetwork := &unstructured.Unstructured{Object: map[string]interface{}{
+			"apiVersion": "osac.openshift.io/v1alpha1",
+			"kind":       "VirtualNetwork",
+			"metadata":   map[string]interface{}{"name": networkingContractName("vni-vnet"), "namespace": "default"},
+			"spec":       map[string]interface{}{"region": "us-east-1", "ipv4Cidr": "10.250.0.0/16"},
+		}}
+		virtualNetwork.SetGroupVersionKind(v1alpha1.GroupVersion.WithKind("VirtualNetwork"))
+		Expect(k8sClient.Create(ctx, virtualNetwork)).To(Succeed())
+		DeferCleanup(func() { _ = k8sClient.Delete(ctx, virtualNetwork) })
+
+		virtualNetwork.Object["status"] = map[string]interface{}{"l3Vni": int64(16777215)}
+		Expect(k8sClient.Status().Update(ctx, virtualNetwork)).To(Succeed())
+
+		storedVirtualNetwork := &unstructured.Unstructured{}
+		storedVirtualNetwork.SetGroupVersionKind(v1alpha1.GroupVersion.WithKind("VirtualNetwork"))
+		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(virtualNetwork), storedVirtualNetwork)).To(Succeed())
+		storedL3VNI, found, err := unstructured.NestedInt64(storedVirtualNetwork.Object, "status", "l3Vni")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(found).To(BeTrue())
+		Expect(storedL3VNI).To(Equal(int64(16777215)))
+
+		storedVirtualNetwork.Object["status"] = map[string]interface{}{"l3Vni": int64(0)}
+		Expect(k8sClient.Status().Update(ctx, storedVirtualNetwork)).To(HaveOccurred())
+
+		storedVirtualNetwork.Object["status"] = map[string]interface{}{"l3Vni": int64(16777216)}
+		Expect(k8sClient.Status().Update(ctx, storedVirtualNetwork)).To(HaveOccurred())
+
+		subnet := &unstructured.Unstructured{Object: map[string]interface{}{
+			"apiVersion": "osac.openshift.io/v1alpha1",
+			"kind":       "Subnet",
+			"metadata":   map[string]interface{}{"name": networkingContractName("vni-subnet"), "namespace": "default"},
+			"spec":       map[string]interface{}{"virtualNetwork": "parent-vn", "ipv4Cidr": "10.250.1.0/24"},
+		}}
+		subnet.SetGroupVersionKind(v1alpha1.GroupVersion.WithKind("Subnet"))
+		Expect(k8sClient.Create(ctx, subnet)).To(Succeed())
+		DeferCleanup(func() { _ = k8sClient.Delete(ctx, subnet) })
+
+		subnet.Object["status"] = map[string]interface{}{"l2Vni": int64(4096)}
+		Expect(k8sClient.Status().Update(ctx, subnet)).To(Succeed())
+
+		storedSubnet := &unstructured.Unstructured{}
+		storedSubnet.SetGroupVersionKind(v1alpha1.GroupVersion.WithKind("Subnet"))
+		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(subnet), storedSubnet)).To(Succeed())
+		storedL2VNI, found, err := unstructured.NestedInt64(storedSubnet.Object, "status", "l2Vni")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(found).To(BeTrue())
+		Expect(storedL2VNI).To(Equal(int64(4096)))
+
+		storedSubnet.Object["status"] = map[string]interface{}{"l2Vni": int64(0)}
+		Expect(k8sClient.Status().Update(ctx, storedSubnet)).To(HaveOccurred())
+
+		storedSubnet.Object["status"] = map[string]interface{}{"l2Vni": int64(16777216)}
+		Expect(k8sClient.Status().Update(ctx, storedSubnet)).To(HaveOccurred())
+	})
+
 	It("accepts canonical IPv4 VirtualNetworks and rejects missing, host-bit, IPv6, and dual-stack CIDRs", func() {
 		valid := &v1alpha1.VirtualNetwork{
 			ObjectMeta: metav1.ObjectMeta{Name: networkingContractName("valid-vn"), Namespace: "default"},
