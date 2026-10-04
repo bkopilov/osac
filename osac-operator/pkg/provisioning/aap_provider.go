@@ -304,7 +304,7 @@ func mergeExtraVars(extraVars, inheritedExtraVars map[string]any) map[string]any
 		return extraVars
 	}
 
-	merged := make(map[string]any, len(extraVars)+len(inheritedExtraVars))
+	merged := make(map[string]any)
 	for key, value := range extraVars {
 		merged[key] = value
 	}
