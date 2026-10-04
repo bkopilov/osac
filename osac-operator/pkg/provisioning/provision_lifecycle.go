@@ -312,7 +312,9 @@ type JobTarget struct {
 	// Provider triggers/polls jobs for this target only.
 	Provider ProvisioningProvider
 
-	// Callbacks fire on this target's own success/failure. Optional.
+	// Callbacks fire on this target's own success/failure. Optional for
+	// independent targets; dependent targets require OnFailed to surface
+	// prerequisite failures.
 	Callbacks *PollCallbacks
 
 	// CheckAPIServer detects a non-terminal job for this target via a fresh
@@ -515,6 +517,14 @@ func validateJobTargets(targets []JobTarget, dependencies map[string]JobTargetDe
 	}
 	if _, err := orderJobTargetsChecked(targets, dependencies); err != nil {
 		return err
+	}
+	for _, target := range targets {
+		if dependencies[target.Name].DependsOn == "" {
+			continue
+		}
+		if target.Callbacks == nil || target.Callbacks.OnFailed == nil {
+			return fmt.Errorf("JobTarget %q requires an OnFailed callback when it depends on another target", target.Name)
+		}
 	}
 	return nil
 }
