@@ -360,6 +360,19 @@ var _ = Describe("dispatchTargetProvider", func() {
 		Expect(resource.Annotations[osacImplementationStrategyAnnotation]).To(Equal("original-value"))
 	})
 
+	It("returns capability errors when the base provider lacks optional output methods", func() {
+		base := struct {
+			provisioning.ProvisioningProvider
+		}{ProvisioningProvider: &mockSubnetProvider{}}
+		provider := newDispatchTargetProvider(base, "cudn_net")
+
+		_, triggerErr := provider.TriggerProvisionWithExtraVars(ctx, resource, map[string]any{"l2_vni": 14})
+		_, statusErr := provider.GetProvisionStatusWithExtraVars(ctx, resource, "job-1")
+
+		Expect(triggerErr).To(MatchError(ContainSubstring("does not support inherited extra vars")))
+		Expect(statusErr).To(MatchError(ContainSubstring("does not expose provisioning outputs")))
+	})
+
 	It("overrides the implementation-strategy annotation on the resource seen by TriggerDeprovision, without mutating the caller's original", func() {
 		var seenAnnotation string
 		mock := &mockSubnetProvider{

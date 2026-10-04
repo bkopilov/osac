@@ -571,6 +571,16 @@ var _ = Describe("AAPProvider", func() {
 			Expect(status.ExtraVars).To(BeNil())
 		})
 
+		It("returns an error when the AAP client cannot fetch the job", func() {
+			aapClient.getJobFunc = func(_ context.Context, _ string) (*aap.Job, error) {
+				return nil, errors.New("AAP connection error")
+			}
+
+			_, err := provider.GetProvisionStatusWithExtraVars(ctx, &v1alpha1.Subnet{}, "789")
+
+			Expect(err).To(MatchError(ContainSubstring("failed to get job")))
+		})
+
 		It("returns a job-specific error for malformed artifacts", func() {
 			aapClient.getJobFunc = func(_ context.Context, _ string) (*aap.Job, error) {
 				return &aap.Job{Status: "successful", Artifacts: []byte(`{"l2_vni":`)}, nil

@@ -526,7 +526,6 @@ func prepareDependentTarget(
 	provState *State,
 	pollInterval time.Duration,
 ) (map[string]any, bool, time.Duration) {
-	log := ctrllog.FromContext(ctx)
 	dependencyJob := FindLatestJobByTypeAndTarget(*provState.Jobs, v1alpha1.JobTypeProvision, prerequisite.Name)
 	if !HasJobID(dependencyJob) || !dependencyJob.State.IsTerminal() {
 		return nil, false, pollInterval
@@ -544,7 +543,19 @@ func prepareDependentTarget(
 	if len(target.RequiredExtraVars) == 0 {
 		return nil, true, 0
 	}
+	return prepareDependentTargetOutputVars(ctx, target, prerequisite, resource, dependencyJob, provState, pollInterval)
+}
 
+func prepareDependentTargetOutputVars(
+	ctx context.Context,
+	target JobTarget,
+	prerequisite JobTarget,
+	resource client.Object,
+	dependencyJob *v1alpha1.JobStatus,
+	provState *State,
+	pollInterval time.Duration,
+) (map[string]any, bool, time.Duration) {
+	log := ctrllog.FromContext(ctx)
 	outputProvider, ok := prerequisite.Provider.(ProvisioningProviderWithProvisionOutputs)
 	if !ok {
 		message := fmt.Sprintf("dependency %q provider does not expose provisioning outputs", prerequisite.Name)
