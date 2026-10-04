@@ -538,17 +538,13 @@ func subnetProvisioningJobsExtractor(obj client.Object) []v1alpha1.JobStatus {
 // has no fabric target (the no-dispatcher legacy path), this is the single-target
 // RunProvisioningLifecycle unchanged, using fully untargeted ("") job history. When
 // plan has a fabric target — with or without an accompanying k8s target — it drives
-// each resolved target independently via RunMultiTargetProvisioningLifecycle, always
-// tagging the fabric target's jobs "fabric" (never leaving it untargeted). Keeping the
-// fabric target consistently tagged, whether or not a k8s target is currently present,
-// means transitioning into or out of dual-dispatch (a NetworkClass gaining or dropping
-// a k8sManager) reuses the fabric target's existing job history and config version
-// instead of re-triggering a duplicate job — see AbsorbsLegacyHistory below for the one
-// exception (the initial migration off pre-dispatcher untargeted history). The Subnet
-// only reaches Ready once allProvisionTargetsSucceeded reports every resolved target's
-// latest job succeeded at the current desired config version — one target succeeding
-// does not flip Ready on its own, and one target failing/backing off does not block
-// another target's independent retry.
+// resolved targets via RunMultiTargetProvisioningLifecycle, always tagging the fabric
+// target's jobs "fabric". Keeping the fabric target consistently tagged, whether or not
+// a k8s target is present, preserves its job history across dispatcher changes. When
+// both managers are dispatched, k8s waits for current fabric success and inherits only
+// l2_vni and l3_vni. Targets without dependencies retain independent retries. The Subnet
+// reaches Ready only once every resolved target's latest job succeeds at the current
+// desired config version.
 func (r *SubnetReconciler) handleProvisioning(ctx context.Context, subnet *v1alpha1.Subnet, plan *dispatcher.DispatchPlan) (ctrl.Result, error) {
 	if r.ProvisioningProvider == nil {
 		ctrllog.FromContext(ctx).Info("no provisioning provider configured, skipping provisioning")
@@ -626,10 +622,12 @@ func (r *SubnetReconciler) handleProvisioning(ctx context.Context, subnet *v1alp
 		}
 		if k8sTarget != nil {
 			targets = append(targets, provisioning.JobTarget{
-				Name:           k8sName,
-				Provider:       newDispatchTargetProvider(r.ProvisioningProvider, k8sTarget.Manager.Name),
-				Callbacks:      &provisioning.PollCallbacks{OnFailed: onFailedFor(k8sName), OnSuccess: onSuccess},
-				CheckAPIServer: checkAPIServerFor(k8sName),
+				Name:              k8sName,
+				Provider:          newDispatchTargetProvider(r.ProvisioningProvider, k8sTarget.Manager.Name),
+				DependsOn:         fabricName,
+				RequiredExtraVars: []string{"l2_vni", "l3_vni"},
+				Callbacks:         &provisioning.PollCallbacks{OnFailed: onFailedFor(k8sName), OnSuccess: onSuccess},
+				CheckAPIServer:    checkAPIServerFor(k8sName),
 			})
 		}
 
