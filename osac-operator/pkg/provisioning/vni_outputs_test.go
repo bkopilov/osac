@@ -74,3 +74,36 @@ var _ = ginkgo.Describe("ParseFabricVNIs", func() {
 		Expect(err).To(HaveOccurred())
 	})
 })
+
+var _ = ginkgo.Describe("ParseFabricOutputConfigMap", func() {
+	ginkgo.It("returns typed VNIs and the reserved range from ConfigMap data", func() {
+		outputs, err := ParseFabricOutputConfigMap(map[string]string{
+			"l2_vni":                "4096",
+			"l3_vni":                "8192",
+			"fabric_reserved_range": "192.0.2.0/26",
+		})
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(outputs).To(Equal(map[string]any{
+			"l2_vni":                int32(4096),
+			"l3_vni":                int32(8192),
+			"fabric_reserved_range": "192.0.2.0/26",
+		}))
+	})
+
+	ginkgo.It("rejects missing required output keys", func() {
+		_, err := ParseFabricOutputConfigMap(map[string]string{"l2_vni": "4096", "l3_vni": "8192"})
+
+		Expect(err).To(MatchError(ContainSubstring("fabric_reserved_range")))
+	})
+
+	ginkgo.It("rejects invalid VNI values", func() {
+		_, err := ParseFabricOutputConfigMap(map[string]string{
+			"l2_vni":                "0",
+			"l3_vni":                "8192",
+			"fabric_reserved_range": "192.0.2.0/26",
+		})
+
+		Expect(err).To(MatchError(ContainSubstring("l2_vni")))
+	})
+})

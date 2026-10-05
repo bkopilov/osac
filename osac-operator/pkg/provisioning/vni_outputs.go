@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"strconv"
+	"strings"
 )
 
 const maxVNI = 1<<24 - 1
@@ -25,6 +26,29 @@ func ParseFabricVNIs(extraVars map[string]any) (FabricVNIs, error) {
 	}
 
 	return FabricVNIs{L2VNI: l2VNI, L3VNI: l3VNI}, nil
+}
+
+func ParseFabricOutputConfigMap(data map[string]string) (map[string]any, error) {
+	for _, key := range []string{"l2_vni", "l3_vni", "fabric_reserved_range"} {
+		if strings.TrimSpace(data[key]) == "" {
+			return nil, fmt.Errorf("fabric output ConfigMap is missing %q", key)
+		}
+	}
+
+	l2VNI, err := parseVNI(map[string]any{"l2_vni": data["l2_vni"]}, "l2_vni")
+	if err != nil {
+		return nil, err
+	}
+	l3VNI, err := parseVNI(map[string]any{"l3_vni": data["l3_vni"]}, "l3_vni")
+	if err != nil {
+		return nil, err
+	}
+
+	return map[string]any{
+		"l2_vni":                *l2VNI,
+		"l3_vni":                *l3VNI,
+		"fabric_reserved_range": data["fabric_reserved_range"],
+	}, nil
 }
 
 func parseVNI(extraVars map[string]any, key string) (*int32, error) {

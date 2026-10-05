@@ -91,13 +91,6 @@ type VirtualNetworkStatus struct {
 	// +kubebuilder:validation:Optional
 	// +kubebuilder:validation:Type=string
 	BackendNetworkID string `json:"backendNetworkId,omitempty"`
-
-	// L3VNI is the VXLAN network identifier assigned to this virtual network.
-	// +kubebuilder:validation:Optional
-	// +kubebuilder:validation:Minimum=1
-	// +kubebuilder:validation:Maximum=16777215
-	L3VNI *int32 `json:"l3Vni,omitempty"`
-
 	// Conditions holds an array of metav1.Condition that describe the state of the VirtualNetwork
 	// +kubebuilder:validation:Optional
 	Conditions []metav1.Condition `json:"conditions,omitempty" patchStrategy:"merge" patchMergeKey:"type" protobuf:"bytes,1,rep,name=conditions"`

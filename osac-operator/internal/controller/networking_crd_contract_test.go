@@ -35,7 +35,7 @@ func expectCRDCreateRejected(object client.Object) {
 }
 
 var _ = Describe("IPv4-only networking CRD contracts", func() {
-	It("preserves valid VNIs in resource status and rejects values outside the VXLAN range", func() {
+	It("does not persist fabric VNIs in resource status", func() {
 		virtualNetwork := &unstructured.Unstructured{Object: map[string]interface{}{
 			"apiVersion": "osac.openshift.io/v1alpha1",
 			"kind":       "VirtualNetwork",
@@ -52,16 +52,9 @@ var _ = Describe("IPv4-only networking CRD contracts", func() {
 		storedVirtualNetwork := &unstructured.Unstructured{}
 		storedVirtualNetwork.SetGroupVersionKind(v1alpha1.GroupVersion.WithKind("VirtualNetwork"))
 		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(virtualNetwork), storedVirtualNetwork)).To(Succeed())
-		storedL3VNI, found, err := unstructured.NestedInt64(storedVirtualNetwork.Object, "status", "l3Vni")
+		_, found, err := unstructured.NestedFieldNoCopy(storedVirtualNetwork.Object, "status", "l3Vni")
 		Expect(err).NotTo(HaveOccurred())
-		Expect(found).To(BeTrue())
-		Expect(storedL3VNI).To(Equal(int64(16777215)))
-
-		storedVirtualNetwork.Object["status"] = map[string]interface{}{"l3Vni": int64(0)}
-		Expect(k8sClient.Status().Update(ctx, storedVirtualNetwork)).To(HaveOccurred())
-
-		storedVirtualNetwork.Object["status"] = map[string]interface{}{"l3Vni": int64(16777216)}
-		Expect(k8sClient.Status().Update(ctx, storedVirtualNetwork)).To(HaveOccurred())
+		Expect(found).To(BeFalse())
 
 		subnet := &unstructured.Unstructured{Object: map[string]interface{}{
 			"apiVersion": "osac.openshift.io/v1alpha1",
@@ -79,16 +72,9 @@ var _ = Describe("IPv4-only networking CRD contracts", func() {
 		storedSubnet := &unstructured.Unstructured{}
 		storedSubnet.SetGroupVersionKind(v1alpha1.GroupVersion.WithKind("Subnet"))
 		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(subnet), storedSubnet)).To(Succeed())
-		storedL2VNI, found, err := unstructured.NestedInt64(storedSubnet.Object, "status", "l2Vni")
+		_, found, err = unstructured.NestedFieldNoCopy(storedSubnet.Object, "status", "l2Vni")
 		Expect(err).NotTo(HaveOccurred())
-		Expect(found).To(BeTrue())
-		Expect(storedL2VNI).To(Equal(int64(4096)))
-
-		storedSubnet.Object["status"] = map[string]interface{}{"l2Vni": int64(0)}
-		Expect(k8sClient.Status().Update(ctx, storedSubnet)).To(HaveOccurred())
-
-		storedSubnet.Object["status"] = map[string]interface{}{"l2Vni": int64(16777216)}
-		Expect(k8sClient.Status().Update(ctx, storedSubnet)).To(HaveOccurred())
+		Expect(found).To(BeFalse())
 	})
 
 	It("accepts canonical IPv4 VirtualNetworks and rejects missing, host-bit, IPv6, and dual-stack CIDRs", func() {

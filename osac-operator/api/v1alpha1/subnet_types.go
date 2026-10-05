@@ -106,12 +106,6 @@ type SubnetStatus struct {
 	// BackendNetworkID stores provider-specific network identifier
 	// +kubebuilder:validation:Optional
 	BackendNetworkID string `json:"backendNetworkId,omitempty"`
-
-	// L2VNI is the VXLAN network identifier assigned to this subnet.
-	// +kubebuilder:validation:Optional
-	// +kubebuilder:validation:Minimum=1
-	// +kubebuilder:validation:Maximum=16777215
-	L2VNI *int32 `json:"l2Vni,omitempty"`
 }
 
 // +kubebuilder:object:root=true

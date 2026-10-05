@@ -693,12 +693,19 @@ var _ = Describe("SubnetReconciler", func() {
 			Expect(provisioning.FindLatestJobByTypeAndTarget(fabricJob.Status.ProvisioningJobs, osacv1alpha1.JobTypeProvision, string(dispatcher.ManagerRoleFabric))).NotTo(BeNil())
 			Expect(provisioning.FindLatestJobByTypeAndTarget(fabricJob.Status.ProvisioningJobs, osacv1alpha1.JobTypeProvision, string(dispatcher.ManagerRoleK8s))).To(BeNil())
 
-			mockProvider.getProvisionStatusWithExtraVarsFunc = func(_ context.Context, _ client.Object, jobID string) (provisioning.ProvisionStatusWithExtraVars, error) {
-				return provisioning.ProvisionStatusWithExtraVars{
-					ProvisionStatus: provisioning.ProvisionStatus{JobID: jobID, State: osacv1alpha1.JobStateSucceeded},
-					ExtraVars:       map[string]any{"l2_vni": 14, "l3_vni": 11},
-				}, nil
+			fabricOutput := &corev1.ConfigMap{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "subnet-" + dualSubnet.Name + "-fabric-output",
+					Namespace: dualSubnet.Namespace,
+				},
+				Data: map[string]string{
+					"l2_vni":                "14",
+					"l3_vni":                "11",
+					"fabric_reserved_range": "192.0.2.0/26",
+				},
 			}
+			Expect(k8sClient.Create(ctx, fabricOutput)).To(Succeed())
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, fabricOutput) })
 
 			// Third reconcile observes fabric success and launches the dependent k8s job.
 			_, err = reconciler.Reconcile(ctx, req)
@@ -1017,10 +1024,9 @@ var _ = Describe("SubnetReconciler", func() {
 			Expect(cond).NotTo(BeNil())
 			Expect(cond.Status).To(Equal(metav1.ConditionTrue))
 			Expect(cond.Reason).To(Equal(osacv1alpha1.ReasonAsExpected))
-			Expect(subnet.Status.L2VNI).To(BeNil())
 		})
 
-		It("stores the L2 VNI returned by the successful AAP job", func() {
+		It("does not persist a legacy AAP VNI output", func() {
 			subnet.Status.ProvisioningJobs = []osacv1alpha1.JobStatus{{
 				JobID:     "vni-job",
 				Type:      osacv1alpha1.JobTypeProvision,
@@ -1037,14 +1043,10 @@ var _ = Describe("SubnetReconciler", func() {
 			_, err := reconciler.handleProvisioning(ctx, subnet, nil)
 
 			Expect(err).NotTo(HaveOccurred())
-			Expect(subnet.Status.L2VNI).NotTo(BeNil())
-			Expect(*subnet.Status.L2VNI).To(Equal(int32(4096)))
 			Expect(subnet.Status.Phase).To(Equal(osacv1alpha1.SubnetPhaseReady))
 		})
 
-		It("clears a previously stored L2 VNI when the successful job omits it", func() {
-			previousVNI := int32(4096)
-			subnet.Status.L2VNI = &previousVNI
+		It("completes provisioning when the AAP job has no VNI output", func() {
 			subnet.Status.ProvisioningJobs = []osacv1alpha1.JobStatus{{
 				JobID:     "vni-job-without-output",
 				Type:      osacv1alpha1.JobTypeProvision,
@@ -1061,7 +1063,6 @@ var _ = Describe("SubnetReconciler", func() {
 			_, err := reconciler.handleProvisioning(ctx, subnet, nil)
 
 			Expect(err).NotTo(HaveOccurred())
-			Expect(subnet.Status.L2VNI).To(BeNil())
 			Expect(subnet.Status.Phase).To(Equal(osacv1alpha1.SubnetPhaseReady))
 		})
 
@@ -1134,18 +1135,25 @@ var _ = Describe("SubnetReconciler", func() {
 			Expect(provisioning.FindLatestJobByTypeAndTarget(subnet.Status.ProvisioningJobs, osacv1alpha1.JobTypeProvision, string(dispatcher.ManagerRoleK8s))).To(BeNil())
 		})
 
-		It("forwards only l2_vni and l3_vni from fabric outputs to the k8s manager", func() {
+		It("forwards ConfigMap fabric outputs from the Subnet namespace to the k8s manager", func() {
 			subnet.Status.DesiredConfigVersion = testConfigVersion
 			subnet.Status.ProvisioningJobs = []osacv1alpha1.JobStatus{{
 				JobID: "fabric-1", Type: osacv1alpha1.JobTypeProvision, Target: string(dispatcher.ManagerRoleFabric),
 				State: osacv1alpha1.JobStateRunning, ConfigVersion: testConfigVersion, Timestamp: metav1.NewTime(time.Now().UTC()),
 			}}
-			mockProvider.getProvisionStatusWithExtraVarsFunc = func(_ context.Context, _ client.Object, jobID string) (provisioning.ProvisionStatusWithExtraVars, error) {
-				return provisioning.ProvisionStatusWithExtraVars{
-					ProvisionStatus: provisioning.ProvisionStatus{JobID: jobID, State: osacv1alpha1.JobStateSucceeded},
-					ExtraVars:       map[string]any{"l2_vni": 14, "l3_vni": 11, "fabric_reserved_range": "100-200"},
-				}, nil
+			fabricOutput := &corev1.ConfigMap{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "subnet-" + subnet.Name + "-fabric-output",
+					Namespace: subnet.Namespace,
+				},
+				Data: map[string]string{
+					"l2_vni":                "14",
+					"l3_vni":                "11",
+					"fabric_reserved_range": "192.0.2.0/26",
+				},
 			}
+			Expect(k8sClient.Create(ctx, fabricOutput)).To(Succeed())
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, fabricOutput) })
 			var seenAnnotation string
 			var seenExtraVars map[string]any
 			mockProvider.triggerProvisionWithExtraVarsFunc = func(_ context.Context, resource client.Object, extraVars map[string]any) (*provisioning.ProvisionResult, error) {
@@ -1158,9 +1166,11 @@ var _ = Describe("SubnetReconciler", func() {
 
 			Expect(err).NotTo(HaveOccurred())
 			Expect(seenAnnotation).To(Equal("cudn_net"))
-			Expect(seenExtraVars).To(Equal(map[string]any{"l2_vni": 14, "l3_vni": 11}))
-			Expect(subnet.Status.L2VNI).NotTo(BeNil())
-			Expect(*subnet.Status.L2VNI).To(Equal(int32(14)))
+			Expect(seenExtraVars).To(Equal(map[string]any{
+				"l2_vni":                int32(14),
+				"l3_vni":                int32(11),
+				"fabric_reserved_range": "192.0.2.0/26",
+			}))
 			Expect(provisioning.FindLatestJobByTypeAndTarget(subnet.Status.ProvisioningJobs, osacv1alpha1.JobTypeProvision, string(dispatcher.ManagerRoleK8s))).NotTo(BeNil())
 		})
 

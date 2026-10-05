@@ -237,16 +237,6 @@ func (r *VirtualNetworkReconciler) handleProvisioning(ctx context.Context, vnet 
 		&provisioning.PollCallbacks{
 			OnFailed:      onProvisioningFailure,
 			OnOutputError: onProvisioningFailure,
-			OnSuccessWithExtraVars: func(status provisioning.ProvisionStatusWithExtraVars) error {
-				vnis, err := provisioning.ParseFabricVNIs(status.ExtraVars)
-				if err != nil {
-					return err
-				}
-				if !equality.Semantic.DeepEqual(vnet.Status.L3VNI, vnis.L3VNI) {
-					vnet.Status.L3VNI = vnis.L3VNI
-				}
-				return nil
-			},
 			OnSuccess: func(_ provisioning.ProvisionStatus) {
 				if vnet.Annotations[osacImplementationStrategyAnnotation] == "agentless_net" {
 					vnet.Status.BackendNetworkID = string(vnet.UID)

@@ -1077,8 +1077,8 @@ var _ = Describe("VirtualNetworkReconciler", func() {
 		})
 	})
 
-	Context("VNI output persistence", func() {
-		It("stores the L3 VNI returned by the successful AAP job", func() {
+	Context("fabric VNI status is not persisted", func() {
+		It("completes provisioning when an AAP job returns VNI values", func() {
 			vnet.Status.DesiredConfigVersion = testConfigVersion
 			vnet.Status.ProvisioningJobs = []osacv1alpha1.JobStatus{{
 				JobID:         "vni-job",
@@ -1097,8 +1097,6 @@ var _ = Describe("VirtualNetworkReconciler", func() {
 			_, err := reconciler.handleProvisioning(ctx, vnet)
 
 			Expect(err).NotTo(HaveOccurred())
-			Expect(vnet.Status.L3VNI).NotTo(BeNil())
-			Expect(*vnet.Status.L3VNI).To(Equal(int32(8192)))
 			Expect(vnet.Status.Phase).To(Equal(osacv1alpha1.VirtualNetworkPhaseReady))
 		})
 
@@ -1115,14 +1113,11 @@ var _ = Describe("VirtualNetworkReconciler", func() {
 			_, err := reconciler.handleProvisioning(ctx, vnet)
 
 			Expect(err).NotTo(HaveOccurred())
-			Expect(vnet.Status.L3VNI).To(BeNil())
 			Expect(vnet.Status.Phase).To(Equal(osacv1alpha1.VirtualNetworkPhaseReady))
 		})
 
 		It("clears a previously stored L3 VNI when the successful job omits it", func() {
 			vnet.Status.DesiredConfigVersion = testConfigVersion
-			previousVNI := int32(8192)
-			vnet.Status.L3VNI = &previousVNI
 			vnet.Status.ProvisioningJobs = []osacv1alpha1.JobStatus{{
 				JobID:         "vni-job-without-output",
 				Type:          osacv1alpha1.JobTypeProvision,
@@ -1134,14 +1129,11 @@ var _ = Describe("VirtualNetworkReconciler", func() {
 			_, err := reconciler.handleProvisioning(ctx, vnet)
 
 			Expect(err).NotTo(HaveOccurred())
-			Expect(vnet.Status.L3VNI).To(BeNil())
 			Expect(vnet.Status.Phase).To(Equal(osacv1alpha1.VirtualNetworkPhaseReady))
 		})
 
 		It("does not replace an unchanged L3 VNI", func() {
 			vnet.Status.DesiredConfigVersion = testConfigVersion
-			storedVNI := int32(8192)
-			vnet.Status.L3VNI = &storedVNI
 			vnet.Status.ProvisioningJobs = []osacv1alpha1.JobStatus{{
 				JobID:         "vni-job-unchanged",
 				Type:          osacv1alpha1.JobTypeProvision,
@@ -1152,17 +1144,16 @@ var _ = Describe("VirtualNetworkReconciler", func() {
 			mockProvider.getProvisionStatusWithExtraVarsFunc = func(_ context.Context, _ client.Object, jobID string) (provisioning.ProvisionStatusWithExtraVars, error) {
 				return provisioning.ProvisionStatusWithExtraVars{
 					ProvisionStatus: provisioning.ProvisionStatus{JobID: jobID, State: osacv1alpha1.JobStateSucceeded},
-					ExtraVars:       map[string]any{"l3_vni": float64(storedVNI)},
+					ExtraVars:       map[string]any{"l3_vni": float64(8192)},
 				}, nil
 			}
 
 			_, err := reconciler.handleProvisioning(ctx, vnet)
 
 			Expect(err).NotTo(HaveOccurred())
-			Expect(vnet.Status.L3VNI).To(BeIdenticalTo(&storedVNI))
 		})
 
-		It("marks provisioning failed when the AAP VNI output is invalid", func() {
+		It("does not consume AAP VNI artifacts during VirtualNetwork provisioning", func() {
 			vnet.Status.DesiredConfigVersion = testConfigVersion
 			vnet.Status.ProvisioningJobs = []osacv1alpha1.JobStatus{{
 				JobID:         "vni-job-invalid",
@@ -1181,12 +1172,7 @@ var _ = Describe("VirtualNetworkReconciler", func() {
 			_, err := reconciler.handleProvisioning(ctx, vnet)
 
 			Expect(err).NotTo(HaveOccurred())
-			Expect(vnet.Status.L3VNI).To(BeNil())
-			Expect(vnet.Status.Phase).To(Equal(osacv1alpha1.VirtualNetworkPhaseFailed))
-			condition := apimeta.FindStatusCondition(vnet.Status.Conditions, osacv1alpha1.ConditionReady)
-			Expect(condition).NotTo(BeNil())
-			Expect(condition.Status).To(Equal(metav1.ConditionFalse))
-			Expect(condition.Message).To(ContainSubstring("l3_vni"))
+			Expect(vnet.Status.Phase).To(Equal(osacv1alpha1.VirtualNetworkPhaseReady))
 		})
 	})
 })
