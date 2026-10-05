@@ -25,6 +25,32 @@ var _ = ginkgo.Describe("ParseFabricVNIs", func() {
 		Expect(vnis.L3VNI).To(BeNil())
 	})
 
+	ginkgo.It("treats nil outputs as absent optional VNIs", func() {
+		vnis, err := ParseFabricVNIs(nil)
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(vnis.L2VNI).To(BeNil())
+		Expect(vnis.L3VNI).To(BeNil())
+	})
+
+	ginkgo.DescribeTable("accepts supported integer representations",
+		func(value any) {
+			vnis, err := ParseFabricVNIs(map[string]any{"l2_vni": value})
+
+			Expect(err).NotTo(HaveOccurred())
+			Expect(vnis.L2VNI).NotTo(BeNil())
+			Expect(*vnis.L2VNI).To(Equal(int32(4096)))
+		},
+		ginkgo.Entry("float32", float32(4096)),
+		ginkgo.Entry("string", "4096"),
+		ginkgo.Entry("int", int(4096)),
+		ginkgo.Entry("int32", int32(4096)),
+		ginkgo.Entry("int64", int64(4096)),
+		ginkgo.Entry("uint", uint(4096)),
+		ginkgo.Entry("uint32", uint32(4096)),
+		ginkgo.Entry("uint64", uint64(4096)),
+	)
+
 	ginkgo.DescribeTable("rejects invalid supplied values",
 		func(value any) {
 			_, err := ParseFabricVNIs(map[string]any{"l2_vni": value})
@@ -33,8 +59,18 @@ var _ = ginkgo.Describe("ParseFabricVNIs", func() {
 		ginkgo.Entry("zero", float64(0)),
 		ginkgo.Entry("negative", float64(-1)),
 		ginkgo.Entry("fractional", float64(1.5)),
+		ginkgo.Entry("fractional float32", float32(1.5)),
 		ginkgo.Entry("above the 24-bit maximum", float64(1<<24)),
 		ginkgo.Entry("malformed string", "not-a-vni"),
+		ginkgo.Entry("fractional JSON number", json.Number("1.5")),
+		ginkgo.Entry("unsupported value type", true),
 		ginkgo.Entry("non-finite number", math.NaN()),
+		ginkgo.Entry("uint above MaxInt64", ^uint(0)),
+		ginkgo.Entry("uint64 above MaxInt64", uint64(1)<<63),
 	)
+
+	ginkgo.It("rejects an invalid L3 VNI", func() {
+		_, err := ParseFabricVNIs(map[string]any{"l3_vni": float64(0)})
+		Expect(err).To(HaveOccurred())
+	})
 })
