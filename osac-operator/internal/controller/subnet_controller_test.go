@@ -1154,6 +1154,21 @@ var _ = Describe("SubnetReconciler", func() {
 			}
 			Expect(k8sClient.Create(ctx, fabricOutput)).To(Succeed())
 			DeferCleanup(func() { _ = k8sClient.Delete(ctx, fabricOutput) })
+
+			decoyNamespace := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{GenerateName: "fabric-output-decoy-"}}
+			Expect(k8sClient.Create(ctx, decoyNamespace)).To(Succeed())
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, decoyNamespace) })
+			decoyOutput := &corev1.ConfigMap{
+				ObjectMeta: metav1.ObjectMeta{Name: fabricOutput.Name, Namespace: decoyNamespace.Name},
+				Data: map[string]string{
+					"l2_vni":                "99",
+					"l3_vni":                "98",
+					"fabric_reserved_range": "198.51.100.0/24",
+				},
+			}
+			Expect(k8sClient.Create(ctx, decoyOutput)).To(Succeed())
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, decoyOutput) })
+
 			var seenAnnotation string
 			var seenExtraVars map[string]any
 			mockProvider.triggerProvisionWithExtraVarsFunc = func(_ context.Context, resource client.Object, extraVars map[string]any) (*provisioning.ProvisionResult, error) {
