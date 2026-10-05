@@ -8,7 +8,12 @@ import (
 	"strings"
 )
 
-const maxVNI = 1<<24 - 1
+const (
+	maxVNI                 = 1<<24 - 1
+	l2VNIKey               = "l2_vni"
+	l3VNIKey               = "l3_vni"
+	fabricReservedRangeKey = "fabric_reserved_range"
+)
 
 type FabricVNIs struct {
 	L2VNI *int32
@@ -16,11 +21,11 @@ type FabricVNIs struct {
 }
 
 func ParseFabricVNIs(extraVars map[string]any) (FabricVNIs, error) {
-	l2VNI, err := parseVNI(extraVars, "l2_vni")
+	l2VNI, err := parseVNI(extraVars, l2VNIKey)
 	if err != nil {
 		return FabricVNIs{}, err
 	}
-	l3VNI, err := parseVNI(extraVars, "l3_vni")
+	l3VNI, err := parseVNI(extraVars, l3VNIKey)
 	if err != nil {
 		return FabricVNIs{}, err
 	}
@@ -29,25 +34,25 @@ func ParseFabricVNIs(extraVars map[string]any) (FabricVNIs, error) {
 }
 
 func ParseFabricOutputConfigMap(data map[string]string) (map[string]any, error) {
-	for _, key := range []string{"l2_vni", "l3_vni", "fabric_reserved_range"} {
+	for _, key := range []string{l2VNIKey, l3VNIKey, fabricReservedRangeKey} {
 		if strings.TrimSpace(data[key]) == "" {
 			return nil, fmt.Errorf("fabric output ConfigMap is missing %q", key)
 		}
 	}
 
-	l2VNI, err := parseVNI(map[string]any{"l2_vni": data["l2_vni"]}, "l2_vni")
+	l2VNI, err := parseVNI(map[string]any{l2VNIKey: data[l2VNIKey]}, l2VNIKey)
 	if err != nil {
 		return nil, err
 	}
-	l3VNI, err := parseVNI(map[string]any{"l3_vni": data["l3_vni"]}, "l3_vni")
+	l3VNI, err := parseVNI(map[string]any{l3VNIKey: data[l3VNIKey]}, l3VNIKey)
 	if err != nil {
 		return nil, err
 	}
 
 	return map[string]any{
-		"l2_vni":                *l2VNI,
-		"l3_vni":                *l3VNI,
-		"fabric_reserved_range": data["fabric_reserved_range"],
+		l2VNIKey:               *l2VNI,
+		l3VNIKey:               *l3VNI,
+		fabricReservedRangeKey: data[fabricReservedRangeKey],
 	}, nil
 }
 
