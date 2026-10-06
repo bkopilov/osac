@@ -19,10 +19,12 @@ package controller
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -65,6 +67,70 @@ var _ = Describe("Subnet sequential provisioning policy", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(result.K8sTarget()).NotTo(BeNil())
 		Expect(result.FabricTarget()).NotTo(BeNil())
+	})
+
+	It("selects the oldest persisted Subnet from the envtest API server", func() {
+		// Unlike the fake-client cases above, this exercises the policy against the
+		// suite's real Kubernetes API server and its persisted Subnet metadata.
+		suffix := fmt.Sprintf("%x", time.Now().UnixNano())
+		virtualNetworkID := "envtest-vnet-" + suffix
+		tenantID := "envtest-tenant-" + suffix
+		namespace := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
+			Name: "envtest-sequential-" + suffix,
+			Annotations: map[string]string{
+				osacTenantKey:                       tenantID,
+				"osac.openshift.io/owner-reference": virtualNetworkID,
+			},
+		}}
+		Expect(k8sClient.Create(context.Background(), namespace)).To(Succeed())
+		DeferCleanup(func() {
+			Expect(client.IgnoreNotFound(k8sClient.Delete(context.Background(), namespace))).To(Succeed())
+		})
+
+		older := sequentialSubnet("z-envtest-older-"+suffix, virtualNetworkID, time.Time{})
+		newer := sequentialSubnet("a-envtest-newer-"+suffix, virtualNetworkID, time.Time{})
+		older.Spec.IPv4CIDR = "10.100.1.0/24"
+		newer.Spec.IPv4CIDR = "10.100.2.0/24"
+		for _, subnet := range []*osacv1alpha1.Subnet{older, newer} {
+			subnet.Namespace = namespace.Name
+			subnet.Annotations = map[string]string{
+				osacTenantKey:                       tenantID,
+				"osac.openshift.io/owner-reference": virtualNetworkID,
+			}
+		}
+
+		Expect(k8sClient.Create(context.Background(), older)).To(Succeed())
+		DeferCleanup(func() {
+			Expect(client.IgnoreNotFound(k8sClient.Delete(context.Background(), older))).To(Succeed())
+		})
+		Expect(k8sClient.Create(context.Background(), newer)).To(Succeed())
+		DeferCleanup(func() {
+			Expect(client.IgnoreNotFound(k8sClient.Delete(context.Background(), newer))).To(Succeed())
+		})
+
+		// Read back server-assigned creation timestamps. If the API server records
+		// both creates in the same timestamp tick, the controller's name tie-breaker
+		// determines the expected oldest Subnet.
+		persisted := []*osacv1alpha1.Subnet{&osacv1alpha1.Subnet{}, &osacv1alpha1.Subnet{}}
+		Expect(k8sClient.Get(context.Background(), client.ObjectKeyFromObject(older), persisted[0])).To(Succeed())
+		Expect(k8sClient.Get(context.Background(), client.ObjectKeyFromObject(newer), persisted[1])).To(Succeed())
+		expectedOldest := persisted[0]
+		if persisted[1].CreationTimestamp.Before(&persisted[0].CreationTimestamp) ||
+			(persisted[1].CreationTimestamp.Equal(&persisted[0].CreationTimestamp) && persisted[1].Name < persisted[0].Name) {
+			expectedOldest = persisted[1]
+		}
+
+		reconciler := &SubnetReconciler{Client: k8sClient, APIReader: k8sClient}
+		for _, candidate := range persisted {
+			selectedPlan, err := reconciler.applySequentialProvisioningPolicy(context.Background(), candidate, plan)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(selectedPlan.FabricTarget()).NotTo(BeNil())
+			if candidate.Name == expectedOldest.Name {
+				Expect(selectedPlan.K8sTarget()).NotTo(BeNil(), candidate.Name)
+			} else {
+				Expect(selectedPlan.K8sTarget()).To(BeNil(), candidate.Name)
+			}
+		}
 	})
 
 	It("uses Subnet name as a stable tie-breaker for equal creation timestamps", func() {
