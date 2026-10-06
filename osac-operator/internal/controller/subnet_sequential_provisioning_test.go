@@ -111,7 +111,7 @@ var _ = Describe("Subnet sequential provisioning policy", func() {
 		// Read back server-assigned creation timestamps. If the API server records
 		// both creates in the same timestamp tick, the controller's name tie-breaker
 		// determines the expected oldest Subnet.
-		persisted := []*osacv1alpha1.Subnet{&osacv1alpha1.Subnet{}, &osacv1alpha1.Subnet{}}
+		persisted := []*osacv1alpha1.Subnet{{}, {}}
 		Expect(k8sClient.Get(context.Background(), client.ObjectKeyFromObject(older), persisted[0])).To(Succeed())
 		Expect(k8sClient.Get(context.Background(), client.ObjectKeyFromObject(newer), persisted[1])).To(Succeed())
 		expectedOldest := persisted[0]
