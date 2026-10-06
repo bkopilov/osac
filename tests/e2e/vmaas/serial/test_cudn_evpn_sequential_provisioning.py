@@ -20,6 +20,8 @@ from tests.e2e.vmaas.networking_lifecycle_helpers import (
 
 pytestmark = pytest.mark.serial
 
+_EXCLUDED_CIDR_PREFIXES = {199, 200, 209, 210}
+
 
 def _assert_evpn_netris_profile(private_grpc: GRPCClient) -> None:
     network_classes = private_grpc.list_network_classes()
@@ -150,9 +152,9 @@ def test_cudn_evpn_provisions_first_subnet_only_and_rejects_second_with_vms(
     _assert_evpn_netris_profile(private_grpc)
 
     run_id = uuid4().hex[:8]
-    cidr_prefix = int(run_id[:2], 16)
-    if cidr_prefix in (199, 200, 209, 210):
-        cidr_prefix = (cidr_prefix + 2) % 256
+    cidr_prefix = int(run_id[:2], 16) % 254
+    while any(cidr_prefix + offset in _EXCLUDED_CIDR_PREFIXES for offset in range(3)):
+        cidr_prefix = (cidr_prefix + 1) % 254
     cidr_a = f"10.{cidr_prefix}.0.0/16"
     cidr_b = f"10.{(cidr_prefix + 1) % 256}.0.0/16"
     vnets: list[tuple[str, str]] = []
