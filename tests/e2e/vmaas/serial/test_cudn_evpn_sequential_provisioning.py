@@ -8,7 +8,7 @@ from uuid import uuid4
 import pytest
 
 from tests.e2e.core.grpc_client import GRPCClient
-from tests.e2e.core.helpers import wait_for_grpc_subnet_ready, wait_for_subnet_cr
+from tests.e2e.core.helpers import wait_for_grpc_subnet_ready, wait_for_subnet_cr, wait_for_subnet_ready
 from tests.e2e.core.k8s_client import K8sClient
 from tests.e2e.core.runner import poll_until
 from tests.e2e.vmaas.networking_lifecycle_helpers import (
@@ -193,11 +193,46 @@ def test_cudn_evpn_provisions_first_subnet_only_and_rejects_second_with_vms(
         second_a_jobs = _subnet_jobs(k8s_hub_client, second_a_cr)
         _latest_successful_target_job(second_a_jobs, "fabric")
         assert not any(job.get("target") == "k8s" for job in second_a_jobs), second_a_jobs
+        assert not k8s_hub_client.is_present(resource="namespace", name=second_a_cr, namespace="")
         second_a = k8s_hub_client.get_json(resource="subnet", name=second_a_cr)
         assert second_a.get("metadata", {}).get("annotations", {}).get(
             "osac.openshift.io/k8s-implementation-strategy"
         ) in (None, "")
-        first_cudns_after = _cudns_for_virtual_network(k8s_hub_client, vn_a_cr, {first_a_cr, second_a_cr})
+
+        explicit_skip_name = f"seq-subnet-{run_id}-a3"
+        explicit_skip_response = grpc.call(
+            service="osac.public.v1.Subnets/Create",
+            data={
+                "object": {
+                    "metadata": {
+                        "name": explicit_skip_name,
+                        "annotations": {"osac.openshift.io/skip-k8s-manager": "true"},
+                    },
+                    "spec": {
+                        "virtual_network": {"id": vn_a_id},
+                        "ipv4_cidr": f"10.{cidr_prefix}.3.0/24",
+                    },
+                }
+            },
+        )
+        explicit_skip_id = explicit_skip_response["object"]["id"]
+        subnets.append((explicit_skip_id, None))
+        explicit_skip_cr = wait_for_subnet_cr(k8s=k8s_hub_client, uuid=explicit_skip_id)
+        subnets[-1] = (explicit_skip_id, explicit_skip_cr)
+        wait_for_subnet_ready(k8s=k8s_hub_client, name=explicit_skip_cr)
+        wait_for_grpc_subnet_ready(grpc=grpc, subnet_id=explicit_skip_id)
+        explicit_skip_jobs = _subnet_jobs(k8s_hub_client, explicit_skip_cr)
+        _latest_successful_target_job(explicit_skip_jobs, "fabric")
+        assert not any(job.get("target") == "k8s" for job in explicit_skip_jobs), explicit_skip_jobs
+        assert not k8s_hub_client.is_present(resource="namespace", name=explicit_skip_cr, namespace="")
+        explicit_skip = k8s_hub_client.get_json(resource="subnet", name=explicit_skip_cr)
+        assert explicit_skip.get("metadata", {}).get("annotations", {}).get(
+            "osac.openshift.io/skip-k8s-manager"
+        ) == "true"
+
+        first_cudns_after = _cudns_for_virtual_network(
+            k8s_hub_client, vn_a_cr, {first_a_cr, second_a_cr, explicit_skip_cr}
+        )
         assert [cudn["metadata"]["name"] for cudn in first_cudns_after] == [first_cudn_before["metadata"]["name"]]
         first_cudn_after = first_cudns_after[0]
         assert first_cudn_after["metadata"]["uid"] == first_cudn_before["metadata"]["uid"]
