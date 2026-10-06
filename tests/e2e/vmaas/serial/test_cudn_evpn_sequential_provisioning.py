@@ -127,6 +127,22 @@ spec:
 """
 
 
+def _create_subnet_with_k8s_skip(grpc: GRPCClient, *, name: str, virtual_network_id: str, ipv4_cidr: str) -> str:
+    response = grpc.call(
+        service="osac.public.v1.Subnets/Create",
+        data={
+            "object": {
+                "metadata": {
+                    "name": name,
+                    "annotations": {"osac.openshift.io/skip-k8s-manager": "true"},
+                },
+                "spec": {"virtual_network": {"id": virtual_network_id}, "ipv4_cidr": ipv4_cidr},
+            }
+        },
+    )
+    return response["object"]["id"]
+
+
 def test_cudn_evpn_provisions_first_subnet_only_and_rejects_second_with_vms(
     grpc: GRPCClient, private_grpc: GRPCClient, k8s_hub_client: K8sClient
 ) -> None:
@@ -200,22 +216,12 @@ def test_cudn_evpn_provisions_first_subnet_only_and_rejects_second_with_vms(
         ) in (None, "")
 
         explicit_skip_name = f"seq-subnet-{run_id}-a3"
-        explicit_skip_response = grpc.call(
-            service="osac.public.v1.Subnets/Create",
-            data={
-                "object": {
-                    "metadata": {
-                        "name": explicit_skip_name,
-                        "annotations": {"osac.openshift.io/skip-k8s-manager": "true"},
-                    },
-                    "spec": {
-                        "virtual_network": {"id": vn_a_id},
-                        "ipv4_cidr": f"10.{cidr_prefix}.3.0/24",
-                    },
-                }
-            },
+        explicit_skip_id = _create_subnet_with_k8s_skip(
+            grpc,
+            name=explicit_skip_name,
+            virtual_network_id=vn_a_id,
+            ipv4_cidr=f"10.{cidr_prefix}.3.0/24",
         )
-        explicit_skip_id = explicit_skip_response["object"]["id"]
         subnets.append((explicit_skip_id, None))
         explicit_skip_cr = wait_for_subnet_cr(k8s=k8s_hub_client, uuid=explicit_skip_id)
         subnets[-1] = (explicit_skip_id, explicit_skip_cr)
@@ -237,6 +243,30 @@ def test_cudn_evpn_provisions_first_subnet_only_and_rejects_second_with_vms(
         first_cudn_after = first_cudns_after[0]
         assert first_cudn_after["metadata"]["uid"] == first_cudn_before["metadata"]["uid"]
         assert first_cudn_after["spec"] == first_cudn_before["spec"]
+
+        # Isolate the explicit annotation on the first Subnet in another
+        # VirtualNetwork so oldest-Subnet auto-detection cannot mask the skip.
+        cidr_c_prefix = (cidr_prefix + 2) % 256
+        vn_c_id, vn_c_cr = create_and_wait_for_virtual_network(
+            grpc, k8s_hub_client, f"seq-vn-{run_id}-c", f"10.{cidr_c_prefix}.0.0/16"
+        )
+        vnets.append((vn_c_id, vn_c_cr))
+        explicit_first_id = _create_subnet_with_k8s_skip(
+            grpc,
+            name=f"seq-subnet-{run_id}-c1",
+            virtual_network_id=vn_c_id,
+            ipv4_cidr=f"10.{cidr_c_prefix}.1.0/24",
+        )
+        subnets.append((explicit_first_id, None))
+        explicit_first_cr = wait_for_subnet_cr(k8s=k8s_hub_client, uuid=explicit_first_id)
+        subnets[-1] = (explicit_first_id, explicit_first_cr)
+        wait_for_subnet_ready(k8s=k8s_hub_client, name=explicit_first_cr)
+        wait_for_grpc_subnet_ready(grpc=grpc, subnet_id=explicit_first_id)
+        explicit_first_jobs = _subnet_jobs(k8s_hub_client, explicit_first_cr)
+        _latest_successful_target_job(explicit_first_jobs, "fabric")
+        assert not any(job.get("target") == "k8s" for job in explicit_first_jobs), explicit_first_jobs
+        assert not k8s_hub_client.is_present(resource="namespace", name=explicit_first_cr, namespace="")
+        assert not _cudns_for_virtual_network(k8s_hub_client, vn_c_cr, {explicit_first_cr})
 
         # Network B exercises the API rejection on a true second Subnet, with a
         # VM object in the oldest Subnet namespace on the VirtualNetwork hub.
