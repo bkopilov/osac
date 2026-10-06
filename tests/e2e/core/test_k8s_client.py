@@ -117,10 +117,7 @@ def _invoke_generic_operation(client: K8sClient, operation: str, namespace_overr
     ],
 )
 def test_generic_operations_select_expected_namespace(
-    monkeypatch: pytest.MonkeyPatch,
-    operation: str,
-    namespace_override: str | None,
-    expected_namespace: str | None,
+    monkeypatch: pytest.MonkeyPatch, operation: str, namespace_override: str | None, expected_namespace: str | None
 ) -> None:
     calls: list[tuple[str, ...]] = []
 

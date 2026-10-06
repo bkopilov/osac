@@ -134,10 +134,7 @@ def _create_subnet_with_k8s_skip(grpc: GRPCClient, *, name: str, virtual_network
         service="osac.public.v1.Subnets/Create",
         data={
             "object": {
-                "metadata": {
-                    "name": name,
-                    "annotations": {"osac.openshift.io/skip-k8s-manager": "true"},
-                },
+                "metadata": {"name": name, "annotations": {"osac.openshift.io/skip-k8s-manager": "true"}},
                 "spec": {"virtual_network": {"id": virtual_network_id}, "ipv4_cidr": ipv4_cidr},
             }
         },
@@ -219,10 +216,7 @@ def test_cudn_evpn_provisions_first_subnet_only_and_rejects_second_with_vms(
 
         explicit_skip_name = f"seq-subnet-{run_id}-a3"
         explicit_skip_id = _create_subnet_with_k8s_skip(
-            grpc,
-            name=explicit_skip_name,
-            virtual_network_id=vn_a_id,
-            ipv4_cidr=f"10.{cidr_prefix}.3.0/24",
+            grpc, name=explicit_skip_name, virtual_network_id=vn_a_id, ipv4_cidr=f"10.{cidr_prefix}.3.0/24"
         )
         subnets.append((explicit_skip_id, None))
         explicit_skip_cr = wait_for_subnet_cr(k8s=k8s_hub_client, uuid=explicit_skip_id)
@@ -234,9 +228,9 @@ def test_cudn_evpn_provisions_first_subnet_only_and_rejects_second_with_vms(
         assert not any(job.get("target") == "k8s" for job in explicit_skip_jobs), explicit_skip_jobs
         assert not k8s_hub_client.is_present(resource="namespace", name=explicit_skip_cr, namespace="")
         explicit_skip = k8s_hub_client.get_json(resource="subnet", name=explicit_skip_cr)
-        assert explicit_skip.get("metadata", {}).get("annotations", {}).get(
-            "osac.openshift.io/skip-k8s-manager"
-        ) == "true"
+        assert (
+            explicit_skip.get("metadata", {}).get("annotations", {}).get("osac.openshift.io/skip-k8s-manager") == "true"
+        )
 
         first_cudns_after = _cudns_for_virtual_network(
             k8s_hub_client, vn_a_cr, {first_a_cr, second_a_cr, explicit_skip_cr}
@@ -254,10 +248,7 @@ def test_cudn_evpn_provisions_first_subnet_only_and_rejects_second_with_vms(
         )
         vnets.append((vn_c_id, vn_c_cr))
         explicit_first_id = _create_subnet_with_k8s_skip(
-            grpc,
-            name=f"seq-subnet-{run_id}-c1",
-            virtual_network_id=vn_c_id,
-            ipv4_cidr=f"10.{cidr_c_prefix}.1.0/24",
+            grpc, name=f"seq-subnet-{run_id}-c1", virtual_network_id=vn_c_id, ipv4_cidr=f"10.{cidr_c_prefix}.1.0/24"
         )
         subnets.append((explicit_first_id, None))
         explicit_first_cr = wait_for_subnet_cr(k8s=k8s_hub_client, uuid=explicit_first_id)
