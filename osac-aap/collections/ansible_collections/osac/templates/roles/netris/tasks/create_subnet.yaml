@@ -45,6 +45,22 @@
       Ensure the VirtualNetwork has been created before creating a Subnet.
   when: _parent_vpc is none
 
+- name: Validate Netris VPC L3 VNI
+  ansible.builtin.assert:
+    that:
+      - _parent_vpc is mapping
+      - _parent_vpc.vni is defined
+      - (_parent_vpc.vni | string | trim) is match('^[0-9]+$')
+      - (_parent_vpc.vni | string | trim | int) >= 1
+      - (_parent_vpc.vni | string | trim | int) <= 16777215
+    fail_msg: >-
+      Netris VPC '{{ subnet_virtual_network_name }}' did not return a usable L3 VNI. Expected a decimal value
+      between 1 and 16777215 in the VPC vni field. No Subnet fabric outputs were published.
+
+- name: Export Subnet L3 VNI
+  ansible.builtin.set_fact:
+    subnet_l3_vni: "{{ _parent_vpc.vni | string | trim | int }}"
+
 - name: Compute gateway and DHCP range from subnet CIDR
   when: subnet_ipv4_cidr | length > 0
   block:
@@ -137,5 +153,5 @@
         namespace: "{{ subnet.metadata.namespace }}"
       data:
         l2_vni: "{{ netris_vnet_detail.vxlanID | string }}"
-        l3_vni: "{{ _parent_vpc.vni | string }}"
-        fabric_reserved_range: "{{ _fabric_reserved_range }}"
+        l3_vni: "{{ subnet_l3_vni | string }}"
+        fabric_reserved_range: "{{ netris_vnet_detail.gateway_range }}"
