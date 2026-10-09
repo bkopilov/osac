@@ -91,7 +91,7 @@ var _ = Describe("Tenant compute infrastructure readiness", func() {
 		tenants = &readinessTenantsClient{}
 		reconciler = &function{logger: logger, hubsClient: hubs, hubCache: cache, tenantsClient: tenants, maskCalculator: masks.NewCalculator().Build()}
 		tenant = privatev1.Tenant_builder{Id: "api-id", Metadata: privatev1.Metadata_builder{
-			Name: "tenant-a", Tenant: "tenant-a", Version: 7, Finalizers: []string{finalizers.Controller},
+			Name: "tenant-a", Tenant: "tenant-a", Version: 7, Finalizers: []string{finalizers.TenantLifecycle, finalizers.TenantOnboarding},
 		}.Build(), Status: privatev1.TenantStatus_builder{State: privatev1.TenantState_TENANT_STATE_FAILED, Conditions: []*privatev1.TenantCondition{
 			privatev1.TenantCondition_builder{Type: privatev1.TenantConditionType_TENANT_CONDITION_TYPE_VAULT_READY, Status: ready}.Build(),
 			privatev1.TenantCondition_builder{Type: privatev1.TenantConditionType_TENANT_CONDITION_TYPE_DEFAULT_NETWORKING_READY, Status: ready}.Build(),
@@ -298,13 +298,12 @@ var _ = Describe("Tenant compute infrastructure readiness", func() {
 		Expect(condition(saved).GetStatus()).To(Equal(ready))
 		Expect(tenants.updates[0].GetUpdateMask().GetPaths()).To(ConsistOf("status.conditions"))
 	})
-	It("observes infrastructure while adding the initial finalizer", func() {
+	It("persists both initial finalizers before observing infrastructure", func() {
 		tenant.GetMetadata().SetFinalizers(nil)
 		tenant.ClearStatus()
-		observe(clientWith())
 		Expect(reconciler.Run(ctx, tenant)).To(Succeed())
-		Expect(condition(tenants.updates[0].GetObject()).GetStatus()).To(Equal(notReady))
-		Expect(tenants.updates[0].GetObject().GetMetadata().GetFinalizers()).To(ContainElement(finalizers.Controller))
+		Expect(tenants.updates[0].GetObject().HasStatus()).To(BeFalse())
+		Expect(tenants.updates[0].GetObject().GetMetadata().GetFinalizers()).To(ContainElement(finalizers.TenantLifecycle))
 	})
 	DescribeTable("does not exempt reserved tenants", func(name string) {
 		tenant.GetMetadata().SetName(name)
