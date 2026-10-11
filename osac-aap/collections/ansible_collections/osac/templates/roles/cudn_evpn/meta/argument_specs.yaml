@@ -23,3 +23,7 @@ argument_specs:
         type: str
         required: true
         description: Layer 3 VNI returned by the fabric manager
+      fabric_reserved_range:
+        type: str
+        required: true
+        description: Address range reserved for fabric-managed interfaces
