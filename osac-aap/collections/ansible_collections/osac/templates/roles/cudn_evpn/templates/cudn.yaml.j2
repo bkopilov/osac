@@ -1,0 +1,27 @@
+apiVersion: k8s.ovn.org/v1
+kind: ClusterUserDefinedNetwork
+metadata:
+  name: "{{ vnet_name }}"
+  labels:
+    evpn: "true"
+  annotations:
+    osac.openshift.io/tenant: "{{ tenant_id }}"
+    osac.openshift.io/owner-reference: "VirtualNetwork/{{ vnet_name }}"
+    osac.openshift.io/cudn-owner-subnet: "{{ subnet_name }}"
+spec:
+  namespaceSelector:
+    matchLabels:
+      virtual-network: "{{ vnet_name }}"
+  network:
+    topology: Layer2
+    transport: EVPN
+    layer2:
+      role: Primary
+      subnets:
+        - "{{ subnet_cidr }}"
+    evpn:
+      vtep: tenant-vtep
+      macVRF:
+        vni: {{ l2_vni | int }}
+      ipVRF:
+        vni: {{ l3_vni | int }}
