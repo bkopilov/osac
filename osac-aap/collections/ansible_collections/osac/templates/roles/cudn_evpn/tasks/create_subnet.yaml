@@ -135,11 +135,93 @@
         that:
           - >-
             _existing_cudn.resources | length == 0 or
-            (_existing_cudn.resources[0].metadata.annotations | default({})).get(
-              'osac.openshift.io/owner-reference', '') == 'VirtualNetwork/' ~ vnet_name
+            (
+              (_existing_cudn.resources[0].metadata.annotations | default({})).get(
+                'osac.openshift.io/owner-reference', '') == 'VirtualNetwork/' ~ vnet_name and
+              (_existing_cudn.resources[0].metadata.annotations | default({})).get(
+                'osac.openshift.io/tenant', '') == tenant_id and
+              (
+                (
+                  (_existing_cudn.resources[0].metadata.annotations | default({})).get(
+                    'osac.openshift.io/virtualnetwork-uuid', '') == vnet_uuid and
+                  (_existing_cudn.resources[0].metadata.annotations | default({})).get(
+                    'osac.openshift.io/virtualnetwork-namespace', '') == subnet.metadata.namespace
+                ) or
+                (
+                  (_existing_cudn.resources[0].metadata.annotations | default({})).get(
+                    'osac.openshift.io/virtualnetwork-uuid', '') == '' and
+                  (_existing_cudn.resources[0].metadata.annotations | default({})).get(
+                    'osac.openshift.io/virtualnetwork-namespace', '') == ''
+                )
+              )
+            )
         fail_msg: >-
           A ClusterUserDefinedNetwork named '{{ vnet_name }}' already exists but is not
-          owned by VirtualNetwork '{{ vnet_name }}'. Refusing to manage this shared resource.
+          owned by tenant '{{ tenant_id }}' and VirtualNetwork '{{ vnet_name }}'. Refusing to
+          manage this shared resource.
+
+    - name: Find all Subnets that may already have a workload namespace
+      ansible.builtin.set_fact:
+        _cudn_namespace_subnets: >-
+          {{ _vnet_subnet_lookup.resources | default([])
+             | selectattr('spec.virtualNetwork', 'equalto', vnet_uuid)
+             | list }}
+
+    - name: Read existing workload namespaces before CUDN selector migration
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
+        api_version: v1
+        kind: Namespace
+        name: "{{ item.metadata.name }}"
+      loop: "{{ _cudn_namespace_subnets }}"
+      loop_control:
+        label: "{{ item.metadata.name }}"
+      register: _cudn_namespace_lookups
+
+    - name: Validate existing workload namespaces before selector migration
+      ansible.builtin.assert:
+        that:
+          - >-
+            item.resources | default([]) | length == 0 or
+            (
+              (item.resources[0].metadata.labels | default({})).get('tenant', '') == tenant_id and
+              (item.resources[0].metadata.labels | default({})).get('virtual-network', '') == vnet_name and
+              (item.resources[0].metadata.annotations | default({})).get(
+                'osac.openshift.io/tenant', '') == tenant_id and
+              (item.resources[0].metadata.annotations | default({})).get(
+                'osac.openshift.io/owner-reference', '') == 'Subnet/' ~ item.item.metadata.name and
+              (
+                (item.resources[0].metadata.labels | default({})).get(
+                  'osac.openshift.io/virtualnetwork-uuid', '') == '' or
+                (item.resources[0].metadata.labels | default({})).get(
+                  'osac.openshift.io/virtualnetwork-uuid', '') == vnet_uuid
+              )
+            )
+        fail_msg: >-
+          Existing workload Namespace '{{ item.item.metadata.name }}' does not match the
+          tenant/Subnet identity for VirtualNetwork '{{ vnet_name }}'. Refusing to change
+          the CUDN selector or adopt the Namespace.
+      loop: "{{ _cudn_namespace_lookups.results }}"
+      loop_control:
+        label: "{{ item.item.metadata.name }}"
+
+    - name: Backfill the VirtualNetwork UUID on existing workload namespaces
+      kubernetes.core.k8s:
+        kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
+        state: patched
+        definition:
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: "{{ item.item.metadata.name }}"
+            labels:
+              osac.openshift.io/virtualnetwork-uuid: "{{ vnet_uuid }}"
+      loop: "{{ _cudn_namespace_lookups.results }}"
+      loop_control:
+        label: "{{ item.item.metadata.name }}"
+      when:
+        - item.resources | default([]) | length > 0
+        - (item.resources[0].metadata.labels | default({})).get('osac.openshift.io/virtualnetwork-uuid', '') != vnet_uuid
 
     - name: Keep the persisted CUDN owner stable
       ansible.builtin.set_fact:
@@ -182,6 +264,7 @@
                 labels:
                   tenant: "{{ tenant_id }}"
                   virtual-network: "{{ vnet_name }}"
+                  osac.openshift.io/virtualnetwork-uuid: "{{ vnet_uuid }}"
                   k8s.ovn.org/primary-user-defined-network: ""
                   osac.openshift.io/k8s-manager: cudn_evpn
                 annotations:

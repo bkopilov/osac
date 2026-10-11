@@ -49,11 +49,12 @@ def _render_cudn() -> dict:
     rendered = template.render(
         tenant_id="tenant-7",
         vnet_name="vnet-7",
+        vnet_uuid="vnet-uuid-7",
         subnet_name="test-subnet",
+        subnet={"metadata": {"namespace": "tenant-ns"}},
         subnet_cidr="192.0.2.0/24",
         l2_vni="10007",
         l3_vni="20007",
-        fabric_reserved_range="192.0.2.1-192.0.2.20",
     )
     return yaml.safe_load(rendered)
 
@@ -171,9 +172,14 @@ def test_cudn_template_carries_evpn_identity() -> None:
     assert cudn["metadata"]["annotations"] == {
         "osac.openshift.io/tenant": "tenant-7",
         "osac.openshift.io/owner-reference": "VirtualNetwork/vnet-7",
+        "osac.openshift.io/virtualnetwork-uuid": "vnet-uuid-7",
+        "osac.openshift.io/virtualnetwork-namespace": "tenant-ns",
         "osac.openshift.io/cudn-owner-subnet": "test-subnet",
     }
-    assert cudn["spec"]["namespaceSelector"]["matchLabels"] == {"virtual-network": "vnet-7"}
+    assert cudn["spec"]["namespaceSelector"]["matchLabels"] == {
+        "tenant": "tenant-7",
+        "osac.openshift.io/virtualnetwork-uuid": "vnet-uuid-7",
+    }
 
     network = cudn["spec"]["network"]
     assert network["topology"] == "Layer2"
@@ -201,6 +207,7 @@ def test_role_creates_tenant_namespace_and_waits_for_cudn_ready() -> None:
     assert namespace["kind"] == "Namespace"
     assert namespace["metadata"]["labels"]["k8s.ovn.org/primary-user-defined-network"] == ""
     assert namespace["metadata"]["labels"]["osac.openshift.io/k8s-manager"] == "cudn_evpn"
+    assert namespace["metadata"]["labels"]["osac.openshift.io/virtualnetwork-uuid"] == "{{ vnet_uuid }}"
     assert namespace["metadata"]["annotations"]["osac.openshift.io/owner-reference"] == "Subnet/{{ subnet_name }}"
 
     existing_lookup = tasks[task_names.index("Read existing shared ClusterUserDefinedNetwork")]
@@ -270,6 +277,9 @@ def test_shared_cudn_is_parent_owned_and_reconciled_only_by_current_owner() -> N
     assert read_index < validate_index < namespace_index < apply_index
     assertion = tasks[validate_index]["ansible.builtin.assert"]
     assert "owner-reference" in assertion["that"][0]
+    assert "virtualnetwork-uuid" in assertion["that"][0]
+    assert "virtualnetwork-namespace" in assertion["that"][0]
+    assert "tenant" in assertion["that"][0]
     assert "Refusing to manage this shared resource" in assertion["fail_msg"]
     assert tasks[apply_index]["kubernetes.core.k8s"]["state"] == "present"
     owner_block = next(
@@ -278,6 +288,157 @@ def test_shared_cudn_is_parent_owned_and_reconciled_only_by_current_owner() -> N
     assert owner_block["when"][0] == "_cudn_owner_subnet_name == subnet_name"
     owner_block_names = [task.get("name") for task in _flatten_tasks(owner_block["block"])]
     assert "Create tenant workload namespace" in owner_block_names
+
+
+def test_existing_sibling_namespaces_are_backfilled_before_cudn_selector_migration() -> None:
+    tasks = _create_tasks()
+    task_names = [task.get("name") for task in tasks]
+    validate_cudn_index = task_names.index("Validate existing CUDN belongs to the parent VirtualNetwork")
+    read_namespaces_index = task_names.index("Read existing workload namespaces before CUDN selector migration")
+    validate_namespaces_index = task_names.index("Validate existing workload namespaces before selector migration")
+    backfill_index = task_names.index("Backfill the VirtualNetwork UUID on existing workload namespaces")
+    apply_cudn_index = task_names.index("Apply ClusterUserDefinedNetwork for its current Subnet owner")
+
+    assert validate_cudn_index < read_namespaces_index < validate_namespaces_index < backfill_index < apply_cudn_index
+
+    read_namespace_task = tasks[read_namespaces_index]
+    read_task = read_namespace_task["kubernetes.core.k8s_info"]
+    assert read_task["kind"] == "Namespace"
+    assert read_task["name"] == "{{ item.metadata.name }}"
+    assert read_task["kubeconfig"] == "{{ remote_cluster_kubeconfig | default(omit) }}"
+    assert read_namespace_task["loop"] == "{{ _cudn_namespace_subnets }}"
+
+    namespace_guard = tasks[validate_namespaces_index]["ansible.builtin.assert"]
+    assert "virtual-network" in namespace_guard["that"][0]
+    assert "owner-reference" in namespace_guard["that"][0]
+    assert "virtualnetwork-uuid" in namespace_guard["that"][0]
+    assert "Refusing to change the CUDN selector" in namespace_guard["fail_msg"]
+
+    backfill = tasks[backfill_index]["kubernetes.core.k8s"]
+    assert backfill["state"] == "patched"
+    assert backfill["definition"]["metadata"]["labels"] == {"osac.openshift.io/virtualnetwork-uuid": "{{ vnet_uuid }}"}
+    assert "item.resources | default([]) | length > 0" in tasks[backfill_index]["when"]
+
+
+def test_namespace_selector_migration_only_backfills_matching_tenant_subnets() -> None:
+    guard = next(
+        task
+        for task in _create_tasks()
+        if task.get("name") == "Validate existing workload namespaces before selector migration"
+    )["ansible.builtin.assert"]["that"][0]
+    expression = Environment().compile_expression(guard)
+    subnet_item = {"metadata": {"name": "subnet-7"}}
+    args = {"tenant_id": "tenant-7", "vnet_name": "vnet-7", "vnet_uuid": "vnet-uuid-7"}
+
+    assert expression(item={"resources": [], "item": subnet_item}, **args) is True
+
+    legacy_namespace = {
+        "metadata": {
+            "labels": {"tenant": "tenant-7", "virtual-network": "vnet-7"},
+            "annotations": {
+                "osac.openshift.io/tenant": "tenant-7",
+                "osac.openshift.io/owner-reference": "Subnet/subnet-7",
+            },
+        }
+    }
+    assert expression(item={"resources": [legacy_namespace], "item": subnet_item}, **args) is True
+
+    current_namespace = {
+        "metadata": {
+            "labels": {
+                "tenant": "tenant-7",
+                "virtual-network": "vnet-7",
+                "osac.openshift.io/virtualnetwork-uuid": "vnet-uuid-7",
+            },
+            "annotations": {
+                "osac.openshift.io/tenant": "tenant-7",
+                "osac.openshift.io/owner-reference": "Subnet/subnet-7",
+            },
+        }
+    }
+    assert expression(item={"resources": [current_namespace], "item": subnet_item}, **args) is True
+
+    for key, value in (
+        ("tenant", "tenant-other"),
+        ("virtual-network", "other-vnet"),
+        ("osac.openshift.io/virtualnetwork-uuid", "other-vnet-uuid"),
+    ):
+        conflicting = {
+            **current_namespace,
+            "metadata": {
+                **current_namespace["metadata"],
+                "labels": {**current_namespace["metadata"]["labels"], key: value},
+            },
+        }
+        assert expression(item={"resources": [conflicting], "item": subnet_item}, **args) is False
+
+    conflicting_owner = {
+        **legacy_namespace,
+        "metadata": {
+            **legacy_namespace["metadata"],
+            "annotations": {
+                **legacy_namespace["metadata"]["annotations"],
+                "osac.openshift.io/owner-reference": "Subnet/other",
+            },
+        },
+    }
+    assert expression(item={"resources": [conflicting_owner], "item": subnet_item}, **args) is False
+
+
+def test_existing_cudn_must_match_the_full_virtualnetwork_identity() -> None:
+    task = next(
+        task
+        for task in _create_tasks()
+        if task.get("name") == "Validate existing CUDN belongs to the parent VirtualNetwork"
+    )
+    owner_expression = Environment().compile_expression(task["ansible.builtin.assert"]["that"][0])
+    identity = {
+        "osac.openshift.io/owner-reference": "VirtualNetwork/vnet-7",
+        "osac.openshift.io/tenant": "tenant-7",
+        "osac.openshift.io/virtualnetwork-uuid": "vnet-uuid-7",
+        "osac.openshift.io/virtualnetwork-namespace": "tenant-ns",
+    }
+    args = {
+        "vnet_name": "vnet-7",
+        "tenant_id": "tenant-7",
+        "vnet_uuid": "vnet-uuid-7",
+        "subnet": {"metadata": {"namespace": "tenant-ns"}},
+    }
+
+    assert owner_expression(_existing_cudn={"resources": []}, **args) is True
+    assert owner_expression(_existing_cudn={"resources": [{"metadata": {"annotations": identity}}]}, **args) is True
+    legacy_identity = {
+        "osac.openshift.io/owner-reference": "VirtualNetwork/vnet-7",
+        "osac.openshift.io/tenant": "tenant-7",
+        "osac.openshift.io/cudn-owner-subnet": "old-owner",
+    }
+    assert (
+        owner_expression(_existing_cudn={"resources": [{"metadata": {"annotations": legacy_identity}}]}, **args) is True
+    )
+
+    # A same-named VirtualNetwork in a different tenant or namespace must not
+    # adopt or mutate the cluster-scoped CUDN belonging to another parent.
+    for key, value in (
+        ("osac.openshift.io/tenant", "tenant-other"),
+        ("osac.openshift.io/virtualnetwork-uuid", "other-vnet-uuid"),
+        ("osac.openshift.io/virtualnetwork-namespace", "other-tenant-ns"),
+    ):
+        conflicting = {**identity, key: value}
+        assert (
+            owner_expression(_existing_cudn={"resources": [{"metadata": {"annotations": conflicting}}]}, **args)
+            is False
+        )
+    assert (
+        owner_expression(
+            _existing_cudn={
+                "resources": [
+                    {"metadata": {"annotations": {**legacy_identity, "osac.openshift.io/tenant": "tenant-other"}}}
+                ]
+            },
+            **args,
+        )
+        is False
+    )
 
 
 def test_oldest_active_non_skipped_subnet_owns_cudn_and_ties_break_by_name() -> None:
