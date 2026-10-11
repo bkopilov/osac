@@ -71,6 +71,7 @@ def _run_role_with_inputs(tmp_path: Path, input_overrides: dict) -> subprocess.C
         "template_parameters": {},
         "l2_vni": "10007",
         "l3_vni": "20007",
+        "fabric_reserved_range": "192.0.2.1-192.0.2.20",
     }
     inputs.update(input_overrides)
     playbook = [
