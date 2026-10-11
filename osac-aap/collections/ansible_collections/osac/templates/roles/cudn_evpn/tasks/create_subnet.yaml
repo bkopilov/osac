@@ -15,10 +15,11 @@
       - subnet_cidr | trim | length > 0
       - l2_vni is defined and (l2_vni | string | trim) is match('^[0-9]+$') and l2_vni | int >= 1 and l2_vni | int <= 16777215
       - l3_vni is defined and (l3_vni | string | trim) is match('^[0-9]+$') and l3_vni | int >= 1 and l3_vni | int <= 16777215
+      - fabric_reserved_range is defined and fabric_reserved_range | string | trim | length > 0
     fail_msg: >-
       EVPN Subnet provisioning requires a Subnet name, tenant, VirtualNetwork,
-      IPv4 CIDR, and valid l2_vni and l3_vni values (1-16777215).
-      No Kubernetes resources were changed.
+      IPv4 CIDR, valid l2_vni and l3_vni values (1-16777215), and a nonempty
+      fabric_reserved_range. No Kubernetes resources were changed.
 
 - name: Look up parent VirtualNetwork by UUID label
   kubernetes.core.k8s_info:
