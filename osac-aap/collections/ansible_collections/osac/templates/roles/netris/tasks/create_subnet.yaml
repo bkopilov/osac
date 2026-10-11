@@ -128,6 +128,10 @@
     name: netris.controller.vnet
     tasks_from: read_by_id
 
+- name: Set the Subnet CIDR as the fabric reserved range
+  ansible.builtin.set_fact:
+    _fabric_reserved_range: "{{ subnet_ipv4_cidr | default('') }}"
+
 - name: Validate Netris fabric outputs
   ansible.builtin.assert:
     that:
@@ -141,11 +145,10 @@
       - (_parent_vpc.vni | string | trim) is match('^[0-9]+$')
       - (_parent_vpc.vni | string | trim | int) >= 1
       - (_parent_vpc.vni | string | trim | int) <= 16777215
-      - netris_vnet_detail.gateway_range is defined
-      - netris_vnet_detail.gateway_range | string | trim | length > 0
+      - _fabric_reserved_range | string | trim | length > 0
     fail_msg: >-
-      Netris did not return valid L2/L3 VNIs and a nonempty gateway range for Subnet
-      '{{ subnet_name }}'. Refusing to publish incomplete fabric outputs.
+      Refusing to publish incomplete fabric outputs: Netris must return valid L2/L3
+      VNIs, and the Subnet CIDR must be nonempty.
 
 - name: Publish fabric outputs for the k8s manager
   kubernetes.core.k8s:

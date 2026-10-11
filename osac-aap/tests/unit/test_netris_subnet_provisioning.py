@@ -42,14 +42,21 @@ def test_vnet_read_by_id_uses_fact_from_create_or_find_step() -> None:
 
 
 def _fabric_output_tasks() -> list[dict]:
-    return [
-        task
-        for task in _create_subnet_tasks()
-        if task.get("name") in {"Validate Netris fabric outputs", "Publish fabric outputs for the k8s manager"}
-    ]
+    names = {
+        "Set the Subnet CIDR as the fabric reserved range",
+        "Validate Netris fabric outputs",
+        "Publish fabric outputs for the k8s manager",
+    }
+    return [task for task in _create_subnet_tasks() if task.get("name") in names]
 
 
-def _run_fabric_output_validation(tmp_path: Path, *, vnet: object, vpc: object) -> subprocess.CompletedProcess[str]:
+def _run_fabric_output_validation(
+    tmp_path: Path,
+    *,
+    vnet: object,
+    vpc: object,
+    subnet_ipv4_cidr: str = "192.0.2.0/24",
+) -> subprocess.CompletedProcess[str]:
     ansible_playbook = shutil.which("ansible-playbook")
     assert ansible_playbook is not None, "ansible-playbook must be installed in the AAP dev environment"
 
@@ -64,9 +71,14 @@ def _run_fabric_output_validation(tmp_path: Path, *, vnet: object, vpc: object) 
                 {
                     "hosts": "localhost",
                     "gather_facts": False,
-                    "vars": {"netris_vnet_detail": vnet, "_parent_vpc": vpc, "subnet_name": "test-subnet"},
+                    "vars": {
+                        "netris_vnet_detail": vnet,
+                        "_parent_vpc": vpc,
+                        "subnet_name": "test-subnet",
+                        "subnet_ipv4_cidr": subnet_ipv4_cidr,
+                    },
                     "tasks": [
-                        _fabric_output_tasks()[0],
+                        *_fabric_output_tasks()[:2],
                         {"name": "Confirm outputs passed validation", "ansible.builtin.set_fact": {"validated": True}},
                     ],
                 }
@@ -93,24 +105,31 @@ def test_fabric_outputs_are_validated_before_configmap_publication() -> None:
 
     configmap = tasks[publication_index]["kubernetes.core.k8s"]["definition"]["data"]
     assert tuple(configmap) == _OUTPUT_KEYS
-    assert configmap["l2_vni"] == "{{ netris_vnet_detail.vxlanID | string }}"
+    assert configmap["l2_vni"] == "{{ netris_vnet_detail.vxlanID | string | trim }}"
     assert configmap["l3_vni"] == "{{ subnet_l3_vni | string }}"
-    assert configmap["fabric_reserved_range"] == "{{ netris_vnet_detail.gateway_range }}"
+    assert configmap["fabric_reserved_range"] == "{{ _fabric_reserved_range }}"
 
 
 @pytest.mark.parametrize(
-    ("vnet", "vpc"),
+    ("vnet", "vpc", "subnet_ipv4_cidr"),
     [
-        ({"vxlanID": None, "gateway_range": "192.0.2.1-192.0.2.20"}, {"vni": 20007}),
-        ({"vxlanID": "", "gateway_range": "192.0.2.1-192.0.2.20"}, {"vni": 20007}),
-        ({"vxlanID": 0, "gateway_range": "192.0.2.1-192.0.2.20"}, {"vni": 20007}),
-        ({"vxlanID": 10007, "gateway_range": " "}, {"vni": 20007}),
-        ({"vxlanID": 10007, "gateway_range": "192.0.2.1-192.0.2.20"}, {"vni": None}),
-        ({"vxlanID": 10007, "gateway_range": "192.0.2.1-192.0.2.20"}, {"vni": "16777216"}),
+        (None, {"vni": 20007}, "192.0.2.0/24"),
+        ({"vxlanID": None}, {"vni": 20007}, "192.0.2.0/24"),
+        ({"vxlanID": ""}, {"vni": 20007}, "192.0.2.0/24"),
+        ({"vxlanID": 0}, {"vni": 20007}, "192.0.2.0/24"),
+        ({"vxlanID": "16777216"}, {"vni": 20007}, "192.0.2.0/24"),
+        ({"vxlanID": 10007}, None, "192.0.2.0/24"),
+        ({"vxlanID": 10007}, {"vni": None}, "192.0.2.0/24"),
+        ({"vxlanID": 10007}, {"vni": "16777216"}, "192.0.2.0/24"),
+        ({"vxlanID": 10007}, {"vni": 20007}, " "),
     ],
 )
-def test_invalid_fabric_output_fails_before_publication(tmp_path: Path, vnet: object, vpc: object) -> None:
-    result = _run_fabric_output_validation(tmp_path, vnet=vnet, vpc=vpc)
+def test_invalid_fabric_output_fails_before_publication(
+    tmp_path: Path, vnet: object, vpc: object, subnet_ipv4_cidr: str
+) -> None:
+    result = _run_fabric_output_validation(
+        tmp_path, vnet=vnet, vpc=vpc, subnet_ipv4_cidr=subnet_ipv4_cidr
+    )
 
     assert result.returncode != 0
     assert "Refusing to publish incomplete fabric outputs" in result.stdout
@@ -119,7 +138,9 @@ def test_invalid_fabric_output_fails_before_publication(tmp_path: Path, vnet: ob
 
 def test_valid_fabric_outputs_pass_validation(tmp_path: Path) -> None:
     result = _run_fabric_output_validation(
-        tmp_path, vnet={"vxlanID": 10007, "gateway_range": "192.0.2.1-192.0.2.20"}, vpc={"vni": 20007}
+        tmp_path,
+        vnet={"vxlanID": " 10007 "},
+        vpc={"vni": 20007},
     )
 
     assert result.returncode == 0, result.stdout + result.stderr
