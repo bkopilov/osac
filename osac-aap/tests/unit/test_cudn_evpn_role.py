@@ -55,6 +55,7 @@ def _render_cudn() -> dict:
         subnet_cidr="192.0.2.0/24",
         l2_vni="10007",
         l3_vni="20007",
+        fabric_reserved_range="192.0.2.1-192.0.2.20",
     )
     return yaml.safe_load(rendered)
 
@@ -163,7 +164,7 @@ def test_invalid_fabric_inputs_fail_before_namespace_write(tmp_path: Path, input
     assert "Create tenant workload namespace" not in output
 
 
-def test_cudn_template_carries_evpn_identity() -> None:
+def test_cudn_template_carries_evpn_identity_and_fabric_range() -> None:
     cudn = _render_cudn()
 
     assert cudn["kind"] == "ClusterUserDefinedNetwork"
@@ -186,6 +187,7 @@ def test_cudn_template_carries_evpn_identity() -> None:
     assert network["transport"] == "EVPN"
     assert network["layer2"]["role"] == "Primary"
     assert network["layer2"]["subnets"] == ["192.0.2.0/24"]
+    assert network["layer2"]["reservedSubnets"] == ["192.0.2.1-192.0.2.20"]
     assert "defaultGatewayIPs" not in network["layer2"]
     assert network["evpn"] == {"vtep": "tenant-vtep", "macVRF": {"vni": 10007}, "ipVRF": {"vni": 20007}}
 

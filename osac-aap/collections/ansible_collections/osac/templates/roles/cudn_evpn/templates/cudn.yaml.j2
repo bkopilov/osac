@@ -22,6 +22,8 @@ spec:
       role: Primary
       subnets:
         - "{{ subnet_cidr }}"
+      reservedSubnets:
+        - "{{ fabric_reserved_range }}"
     evpn:
       vtep: tenant-vtep
       macVRF:
