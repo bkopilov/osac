@@ -19,6 +19,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"net/netip"
 	"sort"
 	"time"
 
@@ -274,6 +275,14 @@ func (r *SubnetReconciler) handleUpdate(ctx context.Context, subnet *v1alpha1.Su
 		log.Info("implementation strategy not set on parent VirtualNetwork, requeueing", "virtualNetwork", vnet.Name)
 		return ctrl.Result{RequeueAfter: defaultPreconditionRequeueInterval}, nil
 	}
+	if implementationStrategy == agentlessNetImplementationStrategy && !isSupportedAgentlessSubnetPrefix(subnet.Spec.IPv4CIDR) {
+		subnet.Status.Phase = v1alpha1.SubnetPhaseFailed
+		setReadyConditionFailed(
+			&subnet.Status.Conditions,
+			"AgentlessNet Subnet CIDR must be a canonical IPv4 prefix of /30 or shorter for gateway and DHCP support.",
+		)
+		return ctrl.Result{}, nil
+	}
 
 	// Resolve VIP prefix length from NetworkClass (if gRPC is available)
 	vipCIDR := ""
@@ -337,6 +346,15 @@ func (r *SubnetReconciler) handleUpdate(ctx context.Context, subnet *v1alpha1.Su
 	if subnet.Status.Phase == "" ||
 		(subnet.Status.Phase == v1alpha1.SubnetPhaseReady && !isSubnetConfigApplied(subnet.Status.ProvisioningJobs, subnet.Status.DesiredConfigVersion, plan)) {
 		subnet.Status.Phase = v1alpha1.SubnetPhaseProgressing
+	}
+
+	if implementationStrategy == agentlessNetImplementationStrategy {
+		ctx = provisioning.WithSubnetParentVirtualNetwork(ctx, provisioning.SubnetParentVirtualNetwork{
+			FulfillmentID: vnet.Labels[osacVirtualNetworkIDLabel],
+			KubernetesUID: string(vnet.UID),
+			TenantID:      vnet.Annotations[osacTenantKey],
+			Phase:         string(vnet.Status.Phase),
+		})
 	}
 
 	// Handle provisioning
@@ -430,6 +448,11 @@ func withoutK8sTarget(plan *dispatcher.DispatchPlan) *dispatcher.DispatchPlan {
 		}
 	}
 	return filtered
+}
+
+func isSupportedAgentlessSubnetPrefix(cidr string) bool {
+	prefix, err := netip.ParsePrefix(cidr)
+	return err == nil && prefix.Addr().Is4() && prefix.String() == cidr && prefix.Bits() <= 30
 }
 
 // ensureVNetLockLease creates a K8s Lease for V-Net mutex locking if it
