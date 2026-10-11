@@ -152,6 +152,6 @@
         name: "subnet-{{ subnet_name }}-fabric-output"
         namespace: "{{ subnet.metadata.namespace }}"
       data:
-        l2_vni: "{{ netris_vnet_detail.vxlanID | string }}"
+        l2_vni: "{{ netris_vnet_detail.vxlanID | string | trim }}"
         l3_vni: "{{ subnet_l3_vni | string }}"
-        fabric_reserved_range: "{{ netris_vnet_detail.gateway_range }}"
+        fabric_reserved_range: "{{ _fabric_reserved_range }}"

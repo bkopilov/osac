@@ -50,6 +50,20 @@ def test_virtual_network_provisioning_uses_idempotent_vpc_create_or_find() -> No
     assert "vpc_id" in created["ansible.builtin.set_fact"]
 
 
+def test_configmap_publishes_validated_l3_vni_and_current_reserved_range() -> None:
+    tasks = _subnet_tasks()
+    task_names = [task.get("name") for task in tasks]
+    validation_index = task_names.index("Validate Netris VPC L3 VNI")
+    export_index = task_names.index("Export Subnet L3 VNI")
+    publication_index = task_names.index("Publish fabric outputs for the k8s manager")
+    assert validation_index < export_index < publication_index
+
+    data = tasks[publication_index]["kubernetes.core.k8s"]["definition"]["data"]
+    assert data["l2_vni"] == "{{ netris_vnet_detail.vxlanID | string | trim }}"
+    assert data["l3_vni"] == "{{ subnet_l3_vni | string }}"
+    assert data["fabric_reserved_range"] == "{{ _fabric_reserved_range }}"
+
+
 def _vni_validation_tasks() -> list[dict]:
     return [
         task for task in _subnet_tasks() if task.get("name") in {"Validate Netris VPC L3 VNI", "Export Subnet L3 VNI"}
