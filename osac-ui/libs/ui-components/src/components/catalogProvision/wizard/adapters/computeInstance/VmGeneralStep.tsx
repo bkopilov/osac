@@ -33,7 +33,6 @@ const VmGeneralStep = ({ catalogItem }: VmGeneralStepProps) => {
         label={t('SSH public key')}
         name={VM_SSH_KEY_FORM_PATH}
         isDisabled={isSshKeyLocked}
-        allowEmptySelection={!isSshKeyLocked}
       />
     </OsacForm>
   );
