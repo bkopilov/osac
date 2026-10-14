@@ -151,6 +151,10 @@
       IPAM subnet '{{ subnet_name }}' {{ (ipam_already_existed | default(false)) | ternary('already exists', 'created successfully') }}
       (ID: {{ ipam_subnet_id | default('unknown') }})
 
+- name: Ensure the reserved EVPN fabric prefix exists in Netris IPAM
+  ansible.builtin.include_tasks: ensure_fabric_ipam.yaml
+  when: is_cudn_evpn
+
 - name: Create V-Net in Netris controller
   ansible.builtin.include_role:
     name: netris.controller.vnet
