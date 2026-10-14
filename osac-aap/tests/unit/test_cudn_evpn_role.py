@@ -282,6 +282,57 @@ def test_cudn_readiness_wait_rejects_ready_from_an_older_generation() -> None:
     assert evaluate(4)
 
 
+@pytest.mark.parametrize(
+    ("changes", "expected"),
+    [
+        ({}, True),
+        ({"TransportAccepted": {"status": "False"}}, False),
+        ({"NetworkCreated": {"status": "Unknown"}}, False),
+        ({"NetworkAllocationSucceeded": {"status": "False"}}, False),
+        ({"NetworkCreated": None}, False),
+        ({"NetworkCreated": {"observedGeneration": 3}}, False),
+        ({"NetworkCreated": {"observedGeneration": 4}}, True),
+        ({"Ready": {"status": "False", "observedGeneration": 4}}, False),
+    ],
+)
+def test_native_evpn_conditions_require_acceptance_creation_and_allocation(changes: dict, expected: bool) -> None:
+    task = next(t for t in _create_tasks() if t.get("name") == "Wait for current CUDN generation to be Ready")
+    evaluate = Environment().compile_expression(task["until"])
+    conditions = {t: {"type": t, "status": "True"}
+                  for t in ["TransportAccepted", "NetworkCreated", "NetworkAllocationSucceeded"]}
+    for name, change in changes.items():
+        if change is None:
+            conditions.pop(name)
+        else:
+            conditions.setdefault(name, {"type": name}).update(change)
+    resource = {"metadata": {"generation": 4}, "status": {"conditions": list(conditions.values())}}
+    assert bool(evaluate(cudn_status={"resources": [resource]})) == expected
+
+
+@pytest.mark.parametrize("vrf_name", [None, "tenant-vrf"])
+def test_status_export_supports_the_native_api_without_vrf_name(tmp_path: Path, vrf_name: str | None) -> None:
+    tasks = _create_tasks()
+    selected = [t for t in tasks if t.get("name") in ["Validate CUDN VRF status", "Export CUDN status"]]
+    status = {} if vrf_name is None else {"vrfName": vrf_name}
+    playbook = tmp_path / "export_status.yaml"
+    playbook.write_text(yaml.safe_dump([{
+        "hosts": "localhost", "gather_facts": False,
+        "vars": {"vnet_name": "test-vnet", "subnet_name": "test-subnet",
+                 "cudn_status": {"resources": [{"status": status}]}},
+        "tasks": [*selected, {"name": "Check exported statistics", "ansible.builtin.assert": {
+            "that": ["export_result.ansible_stats.data.cudn_name == 'test-vnet'",
+                     "export_result.ansible_stats.data.cudn_namespace == 'test-subnet'",
+                     "export_result.ansible_stats.data.vrf_name == 'tenant-vrf'" if vrf_name else
+                     "'vrf_name' not in export_result.ansible_stats.data"]}}],
+    }], sort_keys=False))
+    data = yaml.safe_load(playbook.read_text())
+    data[0]["tasks"][1]["register"] = "export_result"
+    playbook.write_text(yaml.safe_dump(data, sort_keys=False))
+    result = subprocess.run(["ansible-playbook", "-i", "localhost,", "-c", "local", str(playbook)],
+                            capture_output=True, text=True, check=False)
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
 def test_shared_cudn_is_parent_owned_and_reconciled_only_by_current_owner() -> None:
     tasks = _create_tasks()
     task_names = [task.get("name") for task in tasks]
