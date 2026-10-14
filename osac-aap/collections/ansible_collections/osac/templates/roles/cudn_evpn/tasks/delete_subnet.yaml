@@ -83,7 +83,7 @@
         namespace: "{{ subnet.metadata.namespace }}"
       register: _compute_instance_lookup
 
-    - name: Identify sibling Subnets referenced by ComputeInstances
+    - name: Extract Subnet references from ComputeInstances
       ansible.builtin.set_fact:
         _compute_instance_subnet_refs: >-
           {{ _compute_instance_lookup.resources | default([])
@@ -91,6 +91,9 @@
              | flatten
              | map(attribute='subnetRef', default='')
              | list }}
+
+    - name: Preserve sibling Subnets referenced by ComputeInstances
+      ansible.builtin.set_fact:
         cudn_evpn_live_siblings: >-
           {{ cudn_evpn_live_siblings + (cudn_evpn_sibling_subnets
              | selectattr('metadata.name', 'in', _compute_instance_subnet_refs)

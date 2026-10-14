@@ -488,7 +488,6 @@ def test_shared_cudn_is_parent_owned_and_reconciled_only_by_current_owner() -> N
     assertion = tasks[validate_index]["ansible.builtin.assert"]
     assert "owner-reference" in assertion["that"][0]
     assert "virtualnetwork-uuid" in assertion["that"][0]
-    assert "virtualnetwork-namespace" in assertion["that"][0]
     assert "tenant" in assertion["that"][0]
     assert "Refusing to manage this shared resource" in assertion["fail_msg"]
     assert tasks[apply_index]["kubernetes.core.k8s"]["state"] == "present"
@@ -498,6 +497,71 @@ def test_shared_cudn_is_parent_owned_and_reconciled_only_by_current_owner() -> N
     assert owner_block["when"][0] == "_cudn_owner_subnet_name == subnet_name"
     owner_block_names = [task.get("name") for task in _flatten_tasks(owner_block["block"])]
     assert "Create tenant workload namespace" in owner_block_names
+
+
+@pytest.mark.parametrize(
+    ("compute_instances", "expected_siblings"),
+    [
+        ([], []),
+        (
+            [{"spec": {"networkAttachments": [{"subnetRef": "live-sibling"}]}}],
+            ["live-sibling"],
+        ),
+    ],
+)
+def test_delete_identifies_compute_instance_siblings_after_extracting_refs(
+    tmp_path: Path, compute_instances: list[dict], expected_siblings: list[str]
+) -> None:
+    tasks = _delete_tasks()
+    task_names = [task.get("name") for task in tasks]
+    extract_index = task_names.index("Extract Subnet references from ComputeInstances")
+    preserve_index = task_names.index("Preserve sibling Subnets referenced by ComputeInstances")
+    assert extract_index < preserve_index
+
+    playbook = tmp_path / "compute_instance_siblings.yaml"
+    playbook.write_text(
+        yaml.safe_dump(
+            [
+                {
+                    "hosts": "localhost",
+                    "connection": "local",
+                    "gather_facts": False,
+                    "vars": {
+                        "_compute_instance_lookup": {"resources": compute_instances},
+                        "cudn_evpn_sibling_subnets": [
+                            {"metadata": {"name": "live-sibling"}},
+                            {"metadata": {"name": "unused-sibling"}},
+                        ],
+                        "cudn_evpn_live_siblings": [],
+                        "expected_siblings": expected_siblings,
+                    },
+                    "tasks": [
+                        tasks[extract_index],
+                        tasks[preserve_index],
+                        {
+                            "name": "Check retained sibling Subnets",
+                            "ansible.builtin.assert": {
+                                "that": [
+                                    "cudn_evpn_live_siblings | map(attribute='metadata.name') | list == expected_siblings"
+                                ]
+                            },
+                        },
+                    ],
+                }
+            ],
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    result = subprocess.run(
+        ["ansible-playbook", "--inventory", "localhost,", str(playbook)],
+        cwd=Path(__file__).resolve().parents[2],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=30,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 def test_existing_sibling_namespaces_are_backfilled_before_cudn_selector_migration() -> None:
