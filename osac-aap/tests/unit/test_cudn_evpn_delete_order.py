@@ -40,9 +40,10 @@ def test_cudn_is_deleted_and_fully_absent_before_namespace_cleanup() -> None:
     find_siblings_index = task_names.index("Find sibling EVPN Subnets")
     delete_cudn_index = task_names.index("Delete ClusterUserDefinedNetwork")
     wait_for_cudn_index = task_names.index("Wait for CUDN deletion")
+    cleanup_index = task_names.index("Remove stale CUDN management ports after final CUDN deletion")
     delete_namespace_index = task_names.index("Delete Subnet namespace")
 
-    assert find_siblings_index < delete_cudn_index < wait_for_cudn_index < delete_namespace_index
+    assert find_siblings_index < delete_cudn_index < wait_for_cudn_index < cleanup_index < delete_namespace_index
 
     sibling_task = tasks[find_siblings_index]
     assert sibling_task["ansible.builtin.set_fact"]["cudn_evpn_sibling_subnets"]
@@ -65,6 +66,10 @@ def test_cudn_is_deleted_and_fully_absent_before_namespace_cleanup() -> None:
     assert "cudn_status.resources" in wait_task["until"]
     assert "length == 0" in wait_task["until"]
     assert wait_task["when"] == "not cudn_evpn_has_live_siblings"
+
+    cleanup = tasks[cleanup_index]
+    assert cleanup["ansible.builtin.include_tasks"] == "cleanup_management_ports.yaml"
+    assert cleanup["when"] == "not cudn_evpn_has_live_siblings"
 
     delete_namespace = tasks[delete_namespace_index]["kubernetes.core.k8s"]
     assert delete_namespace["state"] == "absent"
@@ -163,7 +168,12 @@ def test_shared_cudn_decision_is_serialized_and_releases_the_lock() -> None:
     assert inner_names.index("List Subnets in parent VirtualNetwork") < inner_names.index(
         "Delete ClusterUserDefinedNetwork"
     )
-    assert inner_names.index("Delete ClusterUserDefinedNetwork") < inner_names.index("Delete Subnet namespace")
+    assert inner_names.index("Delete ClusterUserDefinedNetwork") < inner_names.index(
+        "Remove stale CUDN management ports after final CUDN deletion"
+    )
+    assert inner_names.index("Remove stale CUDN management ports after final CUDN deletion") < inner_names.index(
+        "Delete Subnet namespace"
+    )
     assert cleanup["always"][0]["ansible.builtin.include_role"]["tasks_from"] == "release"
 
 
@@ -331,7 +341,8 @@ def test_owner_handoff_promotes_oldest_cudn_enabled_sibling_before_removing_old_
         == "from-lease"
     )
     assert (
-        owner_expression(_cudn_owner_lease={"resources": []}, _existing_cudn={"resources": [cudn_owner]}) == "from-cudn"
+        owner_expression(_cudn_owner_lease={"resources": []}, _existing_cudn={"resources": [cudn_owner]})
+        == "from-cudn"
     )
 
     cudn_history = {"osac.openshift.io/k8s-cleanup-strategy": "cudn_evpn"}
@@ -485,7 +496,9 @@ def test_stale_owner_is_cleared_when_only_skipped_siblings_remain() -> None:
         "_cudn_evpn_next_owner": {"metadata": {}},
     }
     assert all(condition(**retained) for condition in retained_conditions)
-    assert not all(condition(**{**retained, "cudn_evpn_has_live_siblings": False}) for condition in retained_conditions)
+    assert not all(
+        condition(**{**retained, "cudn_evpn_has_live_siblings": False}) for condition in retained_conditions
+    )
 
 
 def test_delete_entrypoint_is_declared_for_manager_dispatch() -> None:

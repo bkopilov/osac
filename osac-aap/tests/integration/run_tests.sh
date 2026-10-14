@@ -65,6 +65,7 @@ ROLE_TESTS=(
   "agentless_net_stub"
   "agentless_net_external_ip_pool"
   "agentless_net_subnet"
+  "cudn_evpn_management_port_cleanup"
   "netris_subnet_delete"
   "netris_parent_delete"
 )

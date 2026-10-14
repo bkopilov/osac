@@ -35,6 +35,7 @@
 - name: Set parent VirtualNetwork name
   ansible.builtin.set_fact:
     vnet_name: "{{ _parent_vnet_lookup.resources[0].metadata.name }}"
+    _cudn_evpn_ovn_network_name: "cluster_udn_{{ _parent_vnet_lookup.resources[0].metadata.name }}"
 
 - name: Set shared CUDN lock identity
   ansible.builtin.set_fact:
@@ -517,6 +518,10 @@
       until: cudn_status.resources | default([]) | length == 0
       retries: 30
       delay: 10
+      when: not cudn_evpn_has_live_siblings
+
+    - name: Remove stale CUDN management ports after final CUDN deletion
+      ansible.builtin.include_tasks: cleanup_management_ports.yaml
       when: not cudn_evpn_has_live_siblings
 
     - name: Delete Subnet namespace

@@ -1,0 +1,210 @@
+---
+# CUDN deletion normally removes this OVN-owned port. This targeted fallback
+# cleans only a network-tagged internal management port and deliberately keeps
+# the VRF device in place. The Lease annotation makes a partially interrupted
+# OVS-port/Linux-link deletion safe to retry.
+- name: Find OVN node Pods for stale CUDN management-port cleanup
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
+    api_version: v1
+    kind: Pod
+    namespace: "{{ cudn_evpn_ovn_namespace | default('openshift-ovn-kubernetes') }}"
+    label_selectors:
+      - "{{ cudn_evpn_ovn_pod_selector | default('app=ovnkube-node') }}"
+  register: _cudn_evpn_ovn_node_pod_lookup
+
+- name: Select active OVN node Pods for stale CUDN management-port cleanup
+  ansible.builtin.set_fact:
+    _cudn_evpn_ovn_node_pods: >-
+      {{ _cudn_evpn_ovn_node_pod_lookup.resources | default([])
+         | rejectattr('metadata.deletionTimestamp', 'defined') | list }}
+    _cudn_evpn_ovn_node_names: >-
+      {{ _cudn_evpn_ovn_node_pod_lookup.resources | default([])
+         | rejectattr('metadata.deletionTimestamp', 'defined')
+         | map(attribute='spec.nodeName') | unique | list }}
+
+- name: Validate OVN node Pods are available for stale CUDN management-port cleanup
+  ansible.builtin.assert:
+    that:
+      - _cudn_evpn_ovn_node_pods | length > 0
+      - >-
+        _cudn_evpn_ovn_node_pods
+        | selectattr('status.phase', 'equalto', 'Running') | list | length
+        == _cudn_evpn_ovn_node_pods | length
+      - >-
+        _cudn_evpn_ovn_node_pods
+        | selectattr('spec.nodeName', 'defined') | list | length
+        == _cudn_evpn_ovn_node_pods | length
+    fail_msg: >-
+      Cannot safely remove stale management ports for OVN network
+      '{{ _cudn_evpn_ovn_network_name }}': expected Running ovnkube-node Pods with node names
+      in '{{ cudn_evpn_ovn_namespace | default('openshift-ovn-kubernetes') }}'.
+
+- name: Read the durable management-port cleanup state from the VirtualNetwork Lease
+  kubernetes.core.k8s_info:
+    api_version: coordination.k8s.io/v1
+    kind: Lease
+    namespace: "{{ vnet_lock_namespace }}"
+    name: "{{ vnet_lock_name }}"
+  register: _cudn_evpn_cleanup_lease
+
+- name: Validate the management-port cleanup Lease exists
+  ansible.builtin.assert:
+    that:
+      - _cudn_evpn_cleanup_lease.resources | length == 1
+    fail_msg: >-
+      The VirtualNetwork cleanup Lease '{{ vnet_lock_name }}' is missing; refusing host-network
+      cleanup without durable retry state.
+
+- name: Read previously recorded CUDN management-port names by node
+  ansible.builtin.set_fact:
+    _cudn_evpn_saved_management_ports: >-
+      {{ ((_cudn_evpn_cleanup_lease.resources[0].metadata.annotations | default({})).get(
+        'osac.openshift.io/cudn-management-ports', '{}')) | from_json }}
+
+- name: Validate recorded CUDN management-port retry state
+  ansible.builtin.assert:
+    that:
+      - _cudn_evpn_saved_management_ports is mapping
+      - >-
+        _cudn_evpn_saved_management_ports | dict2items
+        | rejectattr('value', 'sequence') | list | length == 0
+      - >-
+        _cudn_evpn_saved_management_ports | dict2items
+        | selectattr('value', 'string') | list | length == 0
+      - >-
+        _cudn_evpn_saved_management_ports.keys() | list
+        | difference(_cudn_evpn_ovn_node_names) | length == 0
+      - >-
+        _cudn_evpn_saved_management_ports | dict2items | map(attribute='value') | flatten
+        | reject('match', '^ovn-k8s-mp[0-9]+$') | list | length == 0
+      - >-
+        _cudn_evpn_saved_management_ports | dict2items | map(attribute='value') | flatten
+        | map('length') | select('gt', 15) | list | length == 0
+    fail_msg: >-
+      The VirtualNetwork Lease contains invalid or unreachable CUDN management-port cleanup state;
+      refusing to delete Linux interfaces without a verifiable node and interface identity.
+
+- name: Discover network-owned internal management ports before mutating OVS
+  kubernetes.core.k8s_exec:
+    kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
+    namespace: "{{ cudn_evpn_ovn_namespace | default('openshift-ovn-kubernetes') }}"
+    pod: "{{ item.metadata.name }}"
+    container: "{{ cudn_evpn_ovn_container | default('ovnkube-controller') }}"
+    command: >-
+      sh -euc 'command -v ovs-vsctl >/dev/null;
+      network="$1";
+      ports=$(ovs-vsctl --timeout=15 --no-headings --data=bare --format=csv --columns=name
+      find Interface type=internal "external_ids:k8s.ovn.org/network=$network");
+      echo "$ports"' _ "{{ _cudn_evpn_ovn_network_name }}"
+  register: _cudn_evpn_management_port_discovery
+  loop: "{{ _cudn_evpn_ovn_node_pods }}"
+  loop_control:
+    label: "{{ item.metadata.name }}"
+  changed_when: false
+  failed_when: _cudn_evpn_management_port_discovery.rc | default(0) | int != 0
+
+- name: Initialize per-node CUDN management-port cleanup state
+  ansible.builtin.set_fact:
+    _cudn_evpn_management_ports_by_node: "{{ _cudn_evpn_saved_management_ports }}"
+
+- name: Merge discovered OVN management ports into durable retry state
+  ansible.builtin.set_fact:
+    _cudn_evpn_management_ports_by_node: >-
+      {{ _cudn_evpn_management_ports_by_node | combine({
+           item.item.spec.nodeName:
+             (_cudn_evpn_management_ports_by_node.get(item.item.spec.nodeName, [])
+              + (item.stdout_lines | default([]) | reject('equalto', '') | list))
+             | unique | list
+         }) }}
+  loop: "{{ _cudn_evpn_management_port_discovery.results }}"
+  loop_control:
+    label: "{{ item.item.spec.nodeName }}"
+  when: item.stdout_lines | default([]) | reject('equalto', '') | list | length > 0
+
+- name: Validate discovered CUDN management-port identities
+  ansible.builtin.assert:
+    that:
+      - _cudn_evpn_management_ports_by_node is mapping
+      - >-
+        _cudn_evpn_management_ports_by_node.keys() | list
+        | difference(_cudn_evpn_ovn_node_names) | length == 0
+      - >-
+        _cudn_evpn_management_ports_by_node | dict2items | map(attribute='value') | flatten
+        | reject('match', '^ovn-k8s-mp[0-9]+$') | list | length == 0
+      - >-
+        _cudn_evpn_management_ports_by_node | dict2items | map(attribute='value') | flatten
+        | map('length') | select('gt', 15) | list | length == 0
+    fail_msg: >-
+      OVN returned an unexpected management-port identity for network
+      '{{ _cudn_evpn_ovn_network_name }}'; refusing host-network cleanup.
+
+- name: Persist CUDN management-port identities before deleting OVS or Linux interfaces
+  kubernetes.core.k8s:
+    state: patched
+    definition:
+      apiVersion: coordination.k8s.io/v1
+      kind: Lease
+      metadata:
+        name: "{{ vnet_lock_name }}"
+        namespace: "{{ vnet_lock_namespace }}"
+        annotations:
+          osac.openshift.io/cudn-management-ports: "{{ _cudn_evpn_management_ports_by_node | to_json }}"
+  when: _cudn_evpn_management_ports_by_node != _cudn_evpn_saved_management_ports
+
+- name: Remove the deleted CUDN management port and Linux interface from each OVN node
+  kubernetes.core.k8s_exec:
+    kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
+    namespace: "{{ cudn_evpn_ovn_namespace | default('openshift-ovn-kubernetes') }}"
+    pod: "{{ item.metadata.name }}"
+    container: "{{ cudn_evpn_ovn_container | default('ovnkube-controller') }}"
+    command: >-
+      sh -euc 'command -v ovs-vsctl >/dev/null; command -v ip >/dev/null;
+      network="$1"; saved_csv="$2"; current_ports=$(ovs-vsctl --timeout=15 --no-headings --data=bare
+      --format=csv --columns=name find Interface type=internal
+      "external_ids:k8s.ovn.org/network=$network"); saved_ports="";
+      if [ -n "$saved_csv" ]; then old_ifs=$IFS; IFS=,; set -- $saved_csv; IFS=$old_ifs; saved_ports="$*"; fi;
+      if [ -z "$current_ports" ] && [ -z "$saved_ports" ]; then echo already-absent; exit 0; fi;
+      for port in $current_ports; do known=no; for saved in $saved_ports; do
+      if [ "$port" = "$saved" ]; then known=yes; fi; done;
+      if [ "$known" != yes ]; then echo "Unrecorded interface appeared during cleanup: $port" >&2; exit 24; fi;
+      done;
+      for port in $saved_ports; do
+      case "$port" in ovn-k8s-mp[0-9]*) ;; *) echo "Refusing unexpected interface: $port" >&2; exit 20;; esac;
+      ovs_interface=$(ovs-vsctl --timeout=15 --no-headings --data=bare --format=csv --columns=name
+      find Interface "name=$port"); changed=no;
+      if [ -n "$ovs_interface" ]; then owned=no; for current in $current_ports; do
+      if [ "$current" = "$port" ]; then owned=yes; fi; done;
+      if [ "$owned" != yes ]; then echo "Refusing interface not owned by $network: $port" >&2; exit 23; fi;
+      bridge=$(ovs-vsctl --timeout=15 port-to-br "$port");
+      if [ "$bridge" != br-int ]; then echo "Refusing interface $port on bridge $bridge" >&2; exit 21; fi;
+      ovs-vsctl --timeout=15 --if-exists del-port br-int "$port"; changed=yes;
+      fi;
+      if ip link show dev "$port" >/dev/null 2>&1; then ip link delete dev "$port"; changed=yes; fi;
+      if ip link show dev "$port" >/dev/null 2>&1; then echo "Interface remains after deletion: $port" >&2; exit 22; fi;
+      if [ "$changed" = yes ]; then echo removed:$port; else echo already-absent:$port; fi;
+      done;
+      remaining=$(ovs-vsctl --timeout=15 --no-headings --data=bare --format=csv --columns=name
+      find Interface type=internal "external_ids:k8s.ovn.org/network=$network");
+      if [ -n "$remaining" ]; then echo "Network-owned interfaces remain: $remaining" >&2; exit 25; fi' _
+      "{{ _cudn_evpn_ovn_network_name }}"
+      "{{ _cudn_evpn_management_ports_by_node.get(item.spec.nodeName, []) | join(',') }}"
+  register: _cudn_evpn_management_port_cleanup
+  loop: "{{ _cudn_evpn_ovn_node_pods }}"
+  loop_control:
+    label: "{{ item.metadata.name }}"
+  changed_when: "'removed:' in _cudn_evpn_management_port_cleanup.stdout"
+  failed_when: _cudn_evpn_management_port_cleanup.rc | default(0) | int != 0
+
+- name: Clear durable CUDN management-port cleanup state after verifying all node interfaces are gone
+  kubernetes.core.k8s:
+    state: patched
+    definition:
+      apiVersion: coordination.k8s.io/v1
+      kind: Lease
+      metadata:
+        name: "{{ vnet_lock_name }}"
+        namespace: "{{ vnet_lock_namespace }}"
+        annotations:
+          osac.openshift.io/cudn-management-ports: null
+  when: _cudn_evpn_management_ports_by_node | length > 0

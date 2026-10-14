@@ -1,0 +1,289 @@
+---
+- name: CUDN EVPN stale management-port cleanup through Kubernetes exec
+  hosts: localhost
+  gather_facts: false
+  vars:
+    fixture_namespace: osac-system
+    cudn_evpn_ovn_namespace: "{{ fixture_namespace }}"
+    cudn_evpn_ovn_pod_selector: app=cudn-evpn-cleanup-fixture
+    cudn_evpn_ovn_container: mock-ovn-node
+    _cudn_evpn_ovn_network_name: cluster_udn_fixture-vnet
+    fixture_configmap: cudn-evpn-cleanup-fixture-bin
+    fixture_pod: cudn-evpn-cleanup-fixture
+    vnet_lock_name: cudn-evpn-cleanup-fixture
+    vnet_lock_namespace: "{{ fixture_namespace }}"
+  tasks:
+    - name: Run the management-port cleanup fixture
+      block:
+        - name: Remove any previous CUDN cleanup fixture Pod
+          kubernetes.core.k8s:
+            state: absent
+            api_version: v1
+            kind: Pod
+            namespace: "{{ fixture_namespace }}"
+            name: "{{ fixture_pod }}"
+
+        - name: Remove any previous CUDN cleanup fixture ConfigMap
+          kubernetes.core.k8s:
+            state: absent
+            api_version: v1
+            kind: ConfigMap
+            namespace: "{{ fixture_namespace }}"
+            name: "{{ fixture_configmap }}"
+
+        - name: Remove any previous CUDN cleanup fixture Lease
+          kubernetes.core.k8s:
+            state: absent
+            api_version: coordination.k8s.io/v1
+            kind: Lease
+            namespace: "{{ fixture_namespace }}"
+            name: "{{ vnet_lock_name }}"
+
+        - name: Create CUDN cleanup retry-state Lease
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: coordination.k8s.io/v1
+              kind: Lease
+              metadata:
+                name: "{{ vnet_lock_name }}"
+                namespace: "{{ fixture_namespace }}"
+              spec:
+                leaseDurationSeconds: 1200
+
+        - name: Create fake OVS and ip commands for the cleanup fixture
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: v1
+              kind: ConfigMap
+              metadata:
+                name: "{{ fixture_configmap }}"
+                namespace: "{{ fixture_namespace }}"
+              data:
+                ovs-vsctl: |
+                  #!/bin/sh
+                  set -eu
+                  state="$CUDN_TEST_STATE"
+                  while [ "$#" -gt 0 ] && [ "$1" = --timeout=15 ]; do shift; done
+                  case "$1" in
+                    --no-headings)
+                      case "$*" in
+                        *external_ids:k8s.ovn.org/network=cluster_udn_fixture-vnet*)
+                          if [ -f "$state/port" ]; then cat "$state/port"; fi
+                          ;;
+                        *name=ovn-k8s-mp9*)
+                          if [ -f "$state/port" ]; then cat "$state/port"; fi
+                          ;;
+                        *) echo "Unexpected find query: $*" >&2; exit 40 ;;
+                      esac
+                      ;;
+                    port-to-br)
+                      cat "$state/bridge"
+                      ;;
+                    --if-exists)
+                      if [ "$2" != del-port ] || [ "$3" != br-int ] || [ "$4" != ovn-k8s-mp9 ]; then
+                        echo "Unexpected delete request: $*" >&2
+                        exit 41
+                      fi
+                      echo ovs-del >> "$state/calls"
+                      rm -f "$state/port"
+                      ;;
+                    *) echo "Unexpected ovs-vsctl call: $*" >&2; exit 42 ;;
+                  esac
+                ip: |
+                  #!/bin/sh
+                  set -eu
+                  state="$CUDN_TEST_STATE"
+                  if [ "$1" = link ] && [ "$2" = show ]; then
+                    test -f "$state/link"
+                  elif [ "$1" = link ] && [ "$2" = delete ] && [ "$3" = dev ] && [ "$4" = ovn-k8s-mp9 ]; then
+                    if [ -f "$state/fail-ip-delete" ]; then
+                      rm -f "$state/fail-ip-delete"
+                      exit 77
+                    fi
+                    echo ip-del >> "$state/calls"
+                    rm -f "$state/link"
+                  else
+                    echo "Unexpected ip call: $*" >&2
+                    exit 43
+                  fi
+
+        - name: Create a mock OVN node Pod with a stale CUDN management port
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: v1
+              kind: Pod
+              metadata:
+                name: "{{ fixture_pod }}"
+                namespace: "{{ fixture_namespace }}"
+                labels:
+                  app: cudn-evpn-cleanup-fixture
+              spec:
+                restartPolicy: Never
+                containers:
+                  - name: mock-ovn-node
+                    image: registry.k8s.io/e2e-test-images/busybox:1.29-4
+                    command:
+                      - /bin/sh
+                      - -ec
+                      - >-
+                        echo ovn-k8s-mp9 > /state/port;
+                        echo present > /state/link;
+                        echo br-int > /state/bridge;
+                        touch /state/fail-ip-delete;
+                        while true; do sleep 3600; done
+                    env:
+                      - name: CUDN_TEST_STATE
+                        value: /state
+                      - name: PATH
+                        value: /opt/cudn-fixture-bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+                    volumeMounts:
+                      - name: fixture-bin
+                        mountPath: /opt/cudn-fixture-bin
+                        readOnly: true
+                      - name: state
+                        mountPath: /state
+                volumes:
+                  - name: fixture-bin
+                    configMap:
+                      name: "{{ fixture_configmap }}"
+                      defaultMode: 493
+                  - name: state
+                    emptyDir: {}
+
+        - name: Wait for the mock OVN node Pod to be Running
+          kubernetes.core.k8s_info:
+            api_version: v1
+            kind: Pod
+            namespace: "{{ fixture_namespace }}"
+            name: "{{ fixture_pod }}"
+          register: fixture_pod_status
+          until: >-
+            fixture_pod_status.resources | length == 1 and
+            fixture_pod_status.resources[0].status.phase == 'Running'
+          retries: 30
+          delay: 2
+
+        - name: Simulate an interrupted cleanup after OVS removal
+          block:
+            - name: Attempt the cleanup with a one-time Linux link deletion failure
+              ansible.builtin.include_role:
+                name: osac.templates.cudn_evpn
+                tasks_from: cleanup_management_ports
+          rescue:
+            - name: Record the expected interruption
+              ansible.builtin.set_fact:
+                fixture_cleanup_interrupted: true
+
+        - name: Assert OVS was removed while the Linux link remains after interruption
+          kubernetes.core.k8s_exec:
+            namespace: "{{ fixture_namespace }}"
+            pod: "{{ fixture_pod }}"
+            container: mock-ovn-node
+            command: >-
+              sh -euc 'test ! -e /state/port && test -e /state/link &&
+              test "$(cat /state/calls)" = "ovs-del"'
+          register: fixture_interrupted_state
+          failed_when: fixture_interrupted_state.rc | int != 0
+
+        - name: Verify retry identity remains recorded in the Lease after interruption
+          kubernetes.core.k8s_info:
+            api_version: coordination.k8s.io/v1
+            kind: Lease
+            namespace: "{{ fixture_namespace }}"
+            name: "{{ vnet_lock_name }}"
+          register: fixture_interrupted_lease
+
+        - name: Assert interrupted cleanup is resumable from durable state
+          ansible.builtin.assert:
+            that:
+              - fixture_cleanup_interrupted | default(false)
+              - fixture_interrupted_lease.resources | length == 1
+              - >-
+                (fixture_interrupted_lease.resources[0].metadata.annotations[
+                'osac.openshift.io/cudn-management-ports'] | from_json | length) == 1
+              - >-
+                (fixture_interrupted_lease.resources[0].metadata.annotations[
+                'osac.openshift.io/cudn-management-ports'] | from_json | dict2items
+                | map(attribute='value') | flatten | list) == ['ovn-k8s-mp9']
+              - >-
+                (fixture_interrupted_lease.resources[0].metadata.annotations[
+                'osac.openshift.io/cudn-management-ports'] | from_json | dict2items
+                | map(attribute='key') | first) == fixture_pod_status.resources[0].spec.nodeName
+
+        - name: Retry cleanup from the Lease-recorded interface identity
+          ansible.builtin.include_role:
+            name: osac.templates.cudn_evpn
+            tasks_from: cleanup_management_ports
+
+        - name: Assert the retry removed the stale interface
+          ansible.builtin.assert:
+            that:
+              - _cudn_evpn_management_port_cleanup.results | length == 1
+              - _cudn_evpn_management_port_cleanup.results[0].changed
+              - "'removed:ovn-k8s-mp9' in _cudn_evpn_management_port_cleanup.results[0].stdout"
+
+        - name: Verify successful cleanup clears durable retry state
+          kubernetes.core.k8s_info:
+            api_version: coordination.k8s.io/v1
+            kind: Lease
+            namespace: "{{ fixture_namespace }}"
+            name: "{{ vnet_lock_name }}"
+          register: fixture_completed_lease
+
+        - name: Assert the cleanup Lease no longer carries stale interface state
+          ansible.builtin.assert:
+            that:
+              - fixture_completed_lease.resources | length == 1
+              - >-
+                'osac.openshift.io/cudn-management-ports' not in
+                (fixture_completed_lease.resources[0].metadata.annotations | default({}))
+
+        - name: Verify OVS and Linux interface state was removed
+          kubernetes.core.k8s_exec:
+            namespace: "{{ fixture_namespace }}"
+            pod: "{{ fixture_pod }}"
+            container: mock-ovn-node
+            command: >-
+              sh -euc 'test ! -e /state/port && test ! -e /state/link &&
+              test "$(cat /state/calls)" = "$(printf "ovs-del\\nip-del\\n")"'
+          register: fixture_cleanup_state
+          failed_when: fixture_cleanup_state.rc | int != 0
+
+        - name: Run cleanup again to prove the absent-port path is idempotent
+          ansible.builtin.include_role:
+            name: osac.templates.cudn_evpn
+            tasks_from: cleanup_management_ports
+
+        - name: Assert the retry succeeds without reporting a change
+          ansible.builtin.assert:
+            that:
+              - _cudn_evpn_management_port_cleanup.results | length == 1
+              - not _cudn_evpn_management_port_cleanup.results[0].changed
+              - "'already-absent' in _cudn_evpn_management_port_cleanup.results[0].stdout"
+      always:
+        - name: Remove the mock OVN node Pod
+          kubernetes.core.k8s:
+            state: absent
+            api_version: v1
+            kind: Pod
+            namespace: "{{ fixture_namespace }}"
+            name: "{{ fixture_pod }}"
+
+        - name: Remove the CUDN cleanup retry-state Lease
+          kubernetes.core.k8s:
+            state: absent
+            api_version: coordination.k8s.io/v1
+            kind: Lease
+            namespace: "{{ fixture_namespace }}"
+            name: "{{ vnet_lock_name }}"
+
+        - name: Remove the fake command ConfigMap
+          kubernetes.core.k8s:
+            state: absent
+            api_version: v1
+            kind: ConfigMap
+            namespace: "{{ fixture_namespace }}"
+            name: "{{ fixture_configmap }}"
