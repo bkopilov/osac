@@ -564,6 +564,19 @@ def test_delete_identifies_compute_instance_siblings_after_extracting_refs(
     assert result.returncode == 0, result.stdout + result.stderr
 
 
+def test_delete_owner_handoff_derives_gateway_ipam_template_data() -> None:
+    tasks = _delete_tasks()
+    task_names = [task.get("name") for task in tasks]
+    variables_index = task_names.index("Set CUDN template variables from the successor")
+    apply_index = task_names.index("Apply the CUDN for the successor before deleting its current owner")
+    template_variables = tasks[variables_index]["ansible.builtin.set_fact"]
+
+    assert variables_index < apply_index
+    assert template_variables["_evpn_fabric_ipam"] == (
+        "{{ _cudn_next_owner_reserved_range | osac.templates.evpn_fabric_ipam }}"
+    )
+
+
 def test_existing_sibling_namespaces_are_backfilled_before_cudn_selector_migration() -> None:
     tasks = _create_tasks()
     task_names = [task.get("name") for task in tasks]

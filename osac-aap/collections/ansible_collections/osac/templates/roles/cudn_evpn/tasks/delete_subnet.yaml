@@ -385,6 +385,7 @@
         subnet_name: "{{ _cudn_evpn_next_owner.metadata.name }}"
         subnet_cidr: "{{ _cudn_next_owner_subnet_cidr }}"
         fabric_reserved_range: "{{ _cudn_next_owner_reserved_range }}"
+        _evpn_fabric_ipam: "{{ _cudn_next_owner_reserved_range | osac.templates.evpn_fabric_ipam }}"
         l2_vni: "{{ _cudn_next_owner_fabric_output.resources[0].data.l2_vni | int }}"
         l3_vni: "{{ _cudn_next_owner_fabric_output.resources[0].data.l3_vni | int }}"
       when:
