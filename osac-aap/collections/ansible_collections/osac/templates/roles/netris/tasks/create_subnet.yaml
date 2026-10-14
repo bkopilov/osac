@@ -183,8 +183,10 @@
         (netris_vnet_detail.gateways | default([]) | length == 1) and
         (netris_vnet_detail.gateways[0].prefix | default('') | string | trim == _gateway_cidr) and
         (netris_vnet_detail.gateways[0].dhcpEnabled | default(false) | bool) and
-        (netris_vnet_detail.gateways[0].dhcpStartIp | default('') | string | trim == _dhcp_start) and
-        (netris_vnet_detail.gateways[0].dhcpEndIp | default('') | string | trim == _dhcp_end)
+        (netris_vnet_detail.gateways[0].dhcp.start |
+         default(netris_vnet_detail.gateways[0].dhcpStartIp | default('')) | string | trim == _dhcp_start) and
+        (netris_vnet_detail.gateways[0].dhcp.end |
+         default(netris_vnet_detail.gateways[0].dhcpEndIp | default('')) | string | trim == _dhcp_end)
       }}
   when: is_cudn_evpn
 
@@ -236,8 +238,10 @@
           (netris_vnet_detail.gateways | default([]) | length == 1) and
           (netris_vnet_detail.gateways[0].prefix | default('') | string | trim == _gateway_cidr) and
           (netris_vnet_detail.gateways[0].dhcpEnabled | default(false) | bool) and
-          (netris_vnet_detail.gateways[0].dhcpStartIp | default('') | string | trim == _dhcp_start) and
-          (netris_vnet_detail.gateways[0].dhcpEndIp | default('') | string | trim == _dhcp_end)
+          (netris_vnet_detail.gateways[0].dhcp.start |
+           default(netris_vnet_detail.gateways[0].dhcpStartIp | default('')) | string | trim == _dhcp_start) and
+          (netris_vnet_detail.gateways[0].dhcp.end |
+           default(netris_vnet_detail.gateways[0].dhcpEndIp | default('')) | string | trim == _dhcp_end)
         )
     fail_msg: >-
       Refusing to publish incomplete fabric outputs: Netris must return valid L2/L3 VNIs and a Subnet range;

@@ -166,6 +166,7 @@ def _fabric_output_tasks() -> list[dict]:
         "Compute DHCP range for the existing Netris Subnet contract",
         "Set gateway IP for the disjoint EVPN fabric pool",
         "Compute DHCP range for the disjoint EVPN fabric pool",
+        "Check whether existing V-Net matches EVPN gateway contract",
         "Validate Netris fabric outputs",
     }
     return [task for task in _flatten_tasks(_create_subnet_tasks()) if task.get("name") in names]
@@ -197,6 +198,11 @@ def _run_fabric_output_validation(
                     },
                     "tasks": [
                         *_fabric_output_tasks(),
+                        {
+                            "name": "Verify a valid EVPN gateway requires no update",
+                            "ansible.builtin.assert": {"that": ["_evpn_gateway_contract_matches"]},
+                            "when": "is_cudn_evpn",
+                        },
                         {
                             "name": "Capture the reserved fabric address contract",
                             "ansible.builtin.set_fact": {
@@ -316,14 +322,24 @@ def test_invalid_fabric_output_fails_before_publication(
     assert "Confirm outputs passed validation" not in result.stdout
 
 
-def test_valid_fabric_outputs_pass_validation(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "gateway",
+    [
+        {"prefix": "192.0.2.1/26", "dhcpEnabled": True, "dhcpStartIp": "192.0.2.2", "dhcpEndIp": "192.0.2.62"},
+        {
+            "prefix": "192.0.2.1/26",
+            "dhcpEnabled": True,
+            "dhcp": {"start": "192.0.2.2", "end": "192.0.2.62", "optionSet": {"id": 1}},
+        },
+    ],
+    ids=["flat", "nested"],
+)
+def test_valid_fabric_outputs_pass_validation(tmp_path: Path, gateway: dict) -> None:
     result = _run_fabric_output_validation(
         tmp_path,
         vnet={
             "vxlanID": " 10007 ",
-            "gateways": [
-                {"prefix": "192.0.2.1/26", "dhcpEnabled": True, "dhcpStartIp": "192.0.2.2", "dhcpEndIp": "192.0.2.62"}
-            ],
+            "gateways": [gateway],
         },
         vpc={"vni": 20007},
     )
@@ -334,6 +350,37 @@ def test_valid_fabric_outputs_pass_validation(tmp_path: Path) -> None:
     assert '"gateway_cidr": "192.0.2.1/26"' in result.stdout
     assert '"dhcp_start": "192.0.2.2"' in result.stdout
     assert '"dhcp_end": "192.0.2.62"' in result.stdout
+
+
+@pytest.mark.parametrize(
+    "gateway_changes",
+    [
+        {"dhcp": {"start": "192.0.2.3", "end": "192.0.2.62"}},
+        {"dhcp": {"start": "192.0.2.2", "end": "192.0.2.63"}},
+        {"prefix": "192.0.2.1/24"},
+        {"dhcpEnabled": False},
+        {"dhcp": {}},
+        {
+            "dhcp": {"start": "192.0.2.3", "end": "192.0.2.62"},
+            "dhcpStartIp": "192.0.2.2",
+            "dhcpEndIp": "192.0.2.62",
+        },
+    ],
+    ids=["wrong-start", "wrong-end", "wrong-prefix", "dhcp-disabled", "missing-range", "conflicting-flat-range"],
+)
+def test_invalid_nested_gateway_fails_before_publication(tmp_path: Path, gateway_changes: dict) -> None:
+    gateway = {
+        "prefix": "192.0.2.1/26",
+        "dhcpEnabled": True,
+        "dhcp": {"start": "192.0.2.2", "end": "192.0.2.62"},
+    }
+    gateway.update(gateway_changes)
+    result = _run_fabric_output_validation(
+        tmp_path, vnet={"vxlanID": 10007, "gateways": [gateway]}, vpc={"vni": 20007}
+    )
+    assert result.returncode != 0
+    assert "Refusing to publish incomplete fabric outputs" in result.stdout
+    assert "Confirm outputs passed validation" not in result.stdout
 
 
 def test_non_evpn_netris_keeps_the_existing_subnet_gateway_and_dhcp_pool(tmp_path: Path) -> None:
