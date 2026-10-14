@@ -406,12 +406,27 @@
       register: _cudn_successor_status
       until: >-
         _cudn_successor_status.resources | default([]) | length > 0 and
-        (_cudn_successor_status.resources[0].status.conditions | default([])
-         | selectattr('type', 'equalto', 'Ready')
-         | selectattr('status', 'equalto', 'True')
-         | selectattr('observedGeneration', 'defined')
-         | selectattr('observedGeneration', 'ge', _cudn_successor_status.resources[0].metadata.generation)
-         | list | length > 0)
+        (
+          (_cudn_successor_status.resources[0].status.conditions | default([])
+          | selectattr('type', 'equalto', 'Ready')
+          | selectattr('status', 'equalto', 'True')
+          | selectattr('observedGeneration', 'defined')
+          | selectattr('observedGeneration', 'ge', _cudn_successor_status.resources[0].metadata.generation)
+          | list | length > 0) or
+          (
+            (_cudn_successor_status.resources[0].status.conditions | default([])
+            | selectattr('type', 'equalto', 'Ready') | list | length == 0) and
+            (_cudn_successor_status.resources[0].status.conditions | default([])
+            | selectattr('type', 'in', ['TransportAccepted', 'NetworkCreated', 'NetworkAllocationSucceeded'])
+            | selectattr('status', 'equalto', 'True') | map(attribute='type')
+            | unique | list | length == 3) and
+            (_cudn_successor_status.resources[0].status.conditions | default([])
+            | selectattr('type', 'in', ['TransportAccepted', 'NetworkCreated', 'NetworkAllocationSucceeded'])
+            | selectattr('observedGeneration', 'defined')
+            | selectattr('observedGeneration', 'lt', _cudn_successor_status.resources[0].metadata.generation)
+            | list | length == 0)
+          )
+        )
       retries: 30
       delay: 10
       when:
@@ -421,7 +436,7 @@
     - name: Validate successor CUDN VRF status
       ansible.builtin.assert:
         that:
-          - _cudn_successor_status.resources[0].status.vrfName is defined
+          - _cudn_successor_status.resources[0].status.vrfName is string
           - _cudn_successor_status.resources[0].status.vrfName | string | trim | length > 0
         fail_msg: >-
           Successor CUDN '{{ vnet_name }}' did not report the applied generation Ready with a
@@ -429,6 +444,7 @@
       when:
         - _cudn_owner_subnet_name == _deleting_subnet_name
         - (_cudn_evpn_next_owner | default({})).get('metadata', {}).get('name', '') | length > 0
+        - _cudn_successor_status.resources[0].status.vrfName is defined
 
     - name: Transfer persisted owner after successor CUDN is Ready
       kubernetes.core.k8s:

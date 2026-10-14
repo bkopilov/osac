@@ -21,6 +21,10 @@
       IPv4 CIDR, valid l2_vni and l3_vni values (1-16777215), and a nonempty
       fabric_reserved_range. No Kubernetes resources were changed.
 
+- name: Derive OVN-safe gateway and reserved ranges
+  ansible.builtin.set_fact:
+    _evpn_fabric_ipam: "{{ fabric_reserved_range | osac.templates.evpn_fabric_ipam }}"
+
 - name: Look up parent VirtualNetwork by UUID label
   kubernetes.core.k8s_info:
     api_version: osac.openshift.io/v1alpha1
