@@ -50,6 +50,23 @@ def test_virtual_network_provisioning_uses_idempotent_vpc_create_or_find() -> No
     assert "vpc_id" in created["ansible.builtin.set_fact"]
 
 
+def test_virtual_network_exports_vpc_id_as_aap_job_artifact() -> None:
+    tasks = _virtual_network_tasks()
+    task_names = [task.get("name") for task in tasks]
+    vpc_create_index = task_names.index("Create VPC in Netris controller")
+    vpc_validation_index = task_names.index("Validate Netris VPC ID")
+    ipam_create_index = task_names.index("Create IPAM allocation for VirtualNetwork CIDR")
+    export_index = task_names.index("Export VirtualNetwork VPC ID")
+
+    assert vpc_create_index < vpc_validation_index < ipam_create_index < export_index
+    assert export_index == len(tasks) - 1
+    assert tasks[export_index]["ansible.builtin.set_stats"] == {
+        "data": {"vpc_id": "{{ vpc_id | int }}"},
+        "per_host": False,
+        "aggregate": True,
+    }
+
+
 def test_configmap_publishes_validated_l3_vni_and_current_reserved_range() -> None:
     tasks = _subnet_tasks()
     task_names = [task.get("name") for task in tasks]
