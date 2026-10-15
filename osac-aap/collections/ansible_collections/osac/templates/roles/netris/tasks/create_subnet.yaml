@@ -20,16 +20,16 @@
       - subnet_ipv4_cidr is string
       - subnet_ipv4_cidr | ansible.utils.ipaddr('version') == 4
       - subnet_ipv4_cidr | ansible.utils.ipaddr('network/prefix') == subnet_ipv4_cidr
-      - subnet_ipv4_cidr | ansible.utils.ipaddr('prefix') | int <= 28
+      - subnet_ipv4_cidr | ansible.utils.ipaddr('prefix') | int <= 27
     fail_msg: >-
-      Subnet '{{ subnet_name }}' must have a canonical IPv4 CIDR with prefix length /28 or shorter
-      so Netris can reserve a non-overlapping fabric pool inside the Subnet.
+      Subnet '{{ subnet_name }}' must have a canonical IPv4 CIDR with prefix length /27 or shorter
+      so the Netris fabric pool has addresses for the gateway, OVN management port, and DHCP clients.
   when: is_cudn_evpn
 
 - name: Calculate the Netris fabric pool prefix
   ansible.builtin.set_fact:
-    # Reserve the first of four equal blocks. For the common /24 Subnet, this
-    # gives the /26 gateway/DHCP block used by the EVPN design contract.
+    # Reserve the first of four equal blocks. For a /24 Subnet, this gives the
+    # /26 block for the gateway, OVN management port, and DHCP clients.
     _fabric_reserved_prefix: "{{ (subnet_ipv4_cidr | ansible.utils.ipaddr('prefix') | int) + 2 }}"
   when: is_cudn_evpn
 
@@ -120,7 +120,9 @@
 
 - name: Compute DHCP range for the disjoint EVPN fabric pool
   ansible.builtin.set_fact:
-    _dhcp_start: "{{ _fabric_reserved_range | ansible.utils.ipaddr('2') | ansible.utils.ipaddr('address') }}"
+    # The gateway uses the first usable address and OVN's management port the
+    # second; DHCP clients start at the third usable address.
+    _dhcp_start: "{{ _fabric_reserved_range | ansible.utils.ipaddr('3') | ansible.utils.ipaddr('address') }}"
     _dhcp_end: "{{ _last_usable }}"
   when: is_cudn_evpn
 
@@ -187,10 +189,10 @@
         (netris_vnet_detail.gateways | default([]) | length == 1) and
         (netris_vnet_detail.gateways[0].prefix | default('') | string | trim == _gateway_cidr) and
         (netris_vnet_detail.gateways[0].dhcpEnabled | default(false) | bool) and
-        (netris_vnet_detail.gateways[0].dhcp.start |
-         default(netris_vnet_detail.gateways[0].dhcpStartIp | default('')) | string | trim == _dhcp_start) and
-        (netris_vnet_detail.gateways[0].dhcp.end |
-         default(netris_vnet_detail.gateways[0].dhcpEndIp | default('')) | string | trim == _dhcp_end)
+        (((netris_vnet_detail.gateways[0].get('dhcp') or {}).get('start') |
+          default(netris_vnet_detail.gateways[0].get('dhcpStartIp', ''), true) | string | trim) == _dhcp_start) and
+        (((netris_vnet_detail.gateways[0].get('dhcp') or {}).get('end') |
+          default(netris_vnet_detail.gateways[0].get('dhcpEndIp', ''), true) | string | trim) == _dhcp_end)
       }}
   when: is_cudn_evpn
 
@@ -242,10 +244,10 @@
           (netris_vnet_detail.gateways | default([]) | length == 1) and
           (netris_vnet_detail.gateways[0].prefix | default('') | string | trim == _gateway_cidr) and
           (netris_vnet_detail.gateways[0].dhcpEnabled | default(false) | bool) and
-          (netris_vnet_detail.gateways[0].dhcp.start |
-           default(netris_vnet_detail.gateways[0].dhcpStartIp | default('')) | string | trim == _dhcp_start) and
-          (netris_vnet_detail.gateways[0].dhcp.end |
-           default(netris_vnet_detail.gateways[0].dhcpEndIp | default('')) | string | trim == _dhcp_end)
+          (((netris_vnet_detail.gateways[0].get('dhcp') or {}).get('start') |
+            default(netris_vnet_detail.gateways[0].get('dhcpStartIp', ''), true) | string | trim) == _dhcp_start) and
+          (((netris_vnet_detail.gateways[0].get('dhcp') or {}).get('end') |
+            default(netris_vnet_detail.gateways[0].get('dhcpEndIp', ''), true) | string | trim) == _dhcp_end)
         )
     fail_msg: >-
       Refusing to publish incomplete fabric outputs: Netris must return valid L2/L3 VNIs and a Subnet range;
