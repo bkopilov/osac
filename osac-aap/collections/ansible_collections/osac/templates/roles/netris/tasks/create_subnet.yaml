@@ -196,17 +196,44 @@
       }}
   when: is_cudn_evpn
 
+- name: Capture the existing gateway before EVPN reconciliation
+  ansible.builtin.set_fact:
+    _existing_vnet_gateway: "{{ (netris_vnet_detail.gateways | default([]) | first) | default({}) }}"
+  when:
+    - is_cudn_evpn
+    - not _evpn_gateway_contract_matches
+
+# Netris 4.16 returns DHCP values under gateway.dhcp. Preserve the returned
+# gateway ID and nested DHCP metadata because the update role PUTs the full V-Net.
+- name: Build V-Net gateway update preserving existing fields
+  ansible.builtin.set_fact:
+    _vnet_gateway_update: >-
+      {{
+        _existing_vnet_gateway
+        | combine({'prefix': _gateway_cidr, 'dhcpEnabled': true})
+        | combine(
+            (
+              {
+                'dhcp': ((_existing_vnet_gateway.get('dhcp') or {}) | combine({
+                  'start': _dhcp_start,
+                  'end': _dhcp_end
+                }))
+              }
+              if (_existing_vnet_gateway.get('dhcp') | default(none)) is mapping
+              else {
+                'dhcpStartIp': _dhcp_start,
+                'dhcpEndIp': _dhcp_end
+              }
+            )
+          )
+      }}
+  when:
+    - is_cudn_evpn
+    - not _evpn_gateway_contract_matches
+
 - name: Build V-Net update preserving existing configuration
   ansible.builtin.set_fact:
-    _vnet_update_body: >-
-      {{ netris_vnet_detail | combine({
-        'gateways': [{
-          'prefix': _gateway_cidr,
-          'dhcpEnabled': true,
-          'dhcpStartIp': _dhcp_start,
-          'dhcpEndIp': _dhcp_end
-        }]
-      }) }}
+    _vnet_update_body: "{{ netris_vnet_detail | combine({'gateways': [_vnet_gateway_update]}) }}"
   when:
     - is_cudn_evpn
     - not _evpn_gateway_contract_matches

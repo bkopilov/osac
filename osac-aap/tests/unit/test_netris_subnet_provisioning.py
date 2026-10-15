@@ -54,12 +54,23 @@ def test_existing_vnet_gateway_is_updated_without_dropping_other_fields() -> Non
     names = [task.get("name") for task in tasks]
     before_index = names.index("Read V-Net details before EVPN gateway reconciliation")
     match_index = names.index("Check whether existing V-Net matches EVPN gateway contract")
+    capture_index = names.index("Capture the existing gateway before EVPN reconciliation")
+    gateway_index = names.index("Build V-Net gateway update preserving existing fields")
     body_index = names.index("Build V-Net update preserving existing configuration")
     update_index = names.index("Update existing V-Net gateway and DHCP range")
     after_index = names.index("Read V-Net details after EVPN gateway reconciliation")
     validation_index = names.index("Validate Netris fabric outputs")
 
-    assert before_index < match_index < body_index < update_index < after_index < validation_index
+    assert (
+        before_index
+        < match_index
+        < capture_index
+        < gateway_index
+        < body_index
+        < update_index
+        < after_index
+        < validation_index
+    )
 
     match_task = tasks[match_index]
     assert match_task["ansible.builtin.set_fact"]["_evpn_gateway_contract_matches"]
@@ -84,7 +95,40 @@ def test_existing_vnet_gateway_is_updated_without_dropping_other_fields() -> Non
     assert after_task["when"] == "is_cudn_evpn and not _evpn_gateway_contract_matches"
 
 
-def test_vnet_update_body_preserves_existing_fields_and_replaces_gateway(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("gateway", "expects_nested_dhcp"),
+    [
+        pytest.param(
+            {
+                "id": 21,
+                "prefix": "192.0.2.1/26",
+                "dhcpEnabled": True,
+                "dhcpLeaseCount": 61,
+                "dhcp": {
+                    "start": "192.0.2.2",
+                    "end": "192.0.2.62",
+                    "optionSet": {"id": 31},
+                },
+            },
+            True,
+            id="nested-dhcp-response",
+        ),
+        pytest.param(
+            {
+                "id": 21,
+                "prefix": "192.0.2.1/26",
+                "dhcpEnabled": True,
+                "dhcpStartIp": "192.0.2.2",
+                "dhcpEndIp": "192.0.2.62",
+            },
+            False,
+            id="legacy-flat-dhcp-response",
+        ),
+    ],
+)
+def test_vnet_update_body_preserves_existing_fields_and_replaces_gateway(
+    tmp_path: Path, gateway: dict, expects_nested_dhcp: bool
+) -> None:
     ansible_playbook = shutil.which("ansible-playbook")
     assert ansible_playbook is not None, "ansible-playbook must be installed in the AAP dev environment"
     ansible_home = tmp_path / "ansible-home"
@@ -97,22 +141,19 @@ def test_vnet_update_body_preserves_existing_fields_and_replaces_gateway(tmp_pat
         "vxlanID": 10007,
         "vpc": {"id": 9},
         "ports": [{"id": 91}],
-        "gateways": [
-            {
-                "prefix": "192.0.2.1/26",
-                "dhcpEnabled": True,
-                "dhcpStartIp": "192.0.2.2",
-                "dhcpEndIp": "192.0.2.62",
-            }
-        ],
+        "gateways": [gateway],
     }
-    update_tasks = [
-        task
-        for task in _create_subnet_tasks()
-        if task.get("name") == "Build V-Net update preserving existing configuration"
+    update_task_names = {
+        "Capture the existing gateway before EVPN reconciliation",
+        "Build V-Net gateway update preserving existing fields",
+        "Build V-Net update preserving existing configuration",
+    }
+    update_tasks = [task for task in _create_subnet_tasks() if task.get("name") in update_task_names]
+    assert [task["name"] for task in update_tasks] == [
+        "Capture the existing gateway before EVPN reconciliation",
+        "Build V-Net gateway update preserving existing fields",
+        "Build V-Net update preserving existing configuration",
     ]
-    assert len(update_tasks) == 1
-    update_task = update_tasks[0]
     playbook = tmp_path / "update_vnet_body.yaml"
     playbook.write_text(
         yaml.safe_dump(
@@ -127,9 +168,10 @@ def test_vnet_update_body_preserves_existing_fields_and_replaces_gateway(tmp_pat
                         "_dhcp_end": "192.0.2.62",
                         "is_cudn_evpn": True,
                         "_evpn_gateway_contract_matches": False,
+                        "_expects_nested_dhcp": expects_nested_dhcp,
                     },
                     "tasks": [
-                        update_task,
+                        *update_tasks,
                         {
                             "name": "Assert full V-Net update contract",
                             "ansible.builtin.assert": {
@@ -141,10 +183,33 @@ def test_vnet_update_body_preserves_existing_fields_and_replaces_gateway(tmp_pat
                                     "_vnet_update_body.gateways | length == 1",
                                     "_vnet_update_body.gateways[0].prefix == '192.0.2.1/26'",
                                     "_vnet_update_body.gateways[0].dhcpEnabled | bool",
-                                    "_vnet_update_body.gateways[0].dhcpStartIp == '192.0.2.3'",
-                                    "_vnet_update_body.gateways[0].dhcpEndIp == '192.0.2.62'",
+                                    "_vnet_update_body.gateways[0].id | int == 21",
                                 ]
                             },
+                        },
+                        {
+                            "name": "Assert nested DHCP is updated without losing metadata",
+                            "ansible.builtin.assert": {
+                                "that": [
+                                    "_vnet_update_body.gateways[0].dhcp.start == '192.0.2.3'",
+                                    "_vnet_update_body.gateways[0].dhcp.end == '192.0.2.62'",
+                                    "_vnet_update_body.gateways[0].dhcp.optionSet.id | int == 31",
+                                    "_vnet_update_body.gateways[0].dhcpLeaseCount | int == 61",
+                                    "'dhcpStartIp' not in _vnet_update_body.gateways[0]",
+                                ]
+                            },
+                            "when": "_expects_nested_dhcp",
+                        },
+                        {
+                            "name": "Assert flat DHCP is updated for legacy responses",
+                            "ansible.builtin.assert": {
+                                "that": [
+                                    "_vnet_update_body.gateways[0].dhcpStartIp == '192.0.2.3'",
+                                    "_vnet_update_body.gateways[0].dhcpEndIp == '192.0.2.62'",
+                                    "'dhcp' not in _vnet_update_body.gateways[0]",
+                                ]
+                            },
+                            "when": "not _expects_nested_dhcp",
                         },
                     ],
                 }
