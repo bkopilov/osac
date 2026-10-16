@@ -1,6 +1,6 @@
 ---
-# The V-Net gateway uses the reserved prefix, while the OSAC Subnet keeps its
-# full CIDR. Netris requires that gateway prefix to exist as a child IPAM subnet.
+# Keep the Netris V-Net gateway on the full OSAC Subnet CIDR. This child IPAM
+# prefix only bounds the Netris DHCP pool and the OVN-reserved address block.
 - name: Read IPAM subnets in the parent VPC
   ansible.builtin.uri:
     url: "{{ netris_controller_url }}/api/v2/ipam/subnets?filterByVpc={{ _parent_vpc.id }}"

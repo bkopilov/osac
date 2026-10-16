@@ -110,15 +110,15 @@
     - not is_cudn_evpn
     - subnet_ipv4_cidr | length > 0
 
-- name: Set gateway IP for the disjoint EVPN fabric pool
+- name: Set gateway IP using the full EVPN Subnet CIDR
   ansible.builtin.set_fact:
-    _gateway_ip: "{{ _fabric_reserved_range | ansible.utils.ipaddr('next_usable') }}"
+    _gateway_ip: "{{ subnet_ipv4_cidr | ansible.utils.ipaddr('next_usable') }}"
     _gateway_cidr: >-
-      {{ _fabric_reserved_range | ansible.utils.ipaddr('next_usable') }}/{{ _fabric_reserved_prefix }}
+      {{ subnet_ipv4_cidr | ansible.utils.ipaddr('next_usable') }}/{{ subnet_ipv4_cidr | ansible.utils.ipaddr('prefix') }}
     _last_usable: "{{ _fabric_reserved_range | ansible.utils.ipaddr('last_usable') }}"
   when: is_cudn_evpn
 
-- name: Compute DHCP range for the disjoint EVPN fabric pool
+- name: Compute DHCP range inside the reserved EVPN fabric pool
   ansible.builtin.set_fact:
     # The gateway uses the first usable address and OVN's management port the
     # second; DHCP clients start at the third usable address.
