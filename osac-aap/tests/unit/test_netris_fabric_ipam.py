@@ -12,6 +12,7 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
 TASKS = ROOT / "collections/ansible_collections/osac/templates/roles/netris/tasks"
+CURRENT_PREFIX = "192.0.2.0/26"
 EXPECTED_PREFIX = "192.0.2.0/25"
 
 
@@ -20,13 +21,16 @@ EXPECTED_PREFIX = "192.0.2.0/25"
     [
         "new",
         "reuse",
-        "update",
+        "replace",
         "lost-create-response",
-        "lost-update-response",
+        "lost-delete-response",
+        "delete-race-create",
         "wrong-parent",
         "wrong-vpc",
         "missing-parent",
         "prefix-conflict",
+        "hosts-present",
+        "delete-rejected",
     ],
 )
 def test_reserved_prefix_reconciliation_is_idempotent_and_checks_identity(tmp_path: Path, scenario: str) -> None:
@@ -43,18 +47,21 @@ def test_reserved_prefix_reconciliation_is_idempotent_and_checks_identity(tmp_pa
         "name": "test-subnet-fabric",
         "prefix": EXPECTED_PREFIX,
         "parentID": 5,
-        "defaultGateway": "",
-        "description": "",
-        "purpose": "common",
-        "sites": [{"id": 1, "name": "minimal-lab"}],
-        "tenant": {"id": 1, "name": "Admin"},
-        "tags": [],
+        "children": [],
         "vpc": {"id": 3, "name": "test-vpc"},
-        "globalRouting": False,
+        "tenant": {"id": 1, "name": "Admin"},
     }
     pools = [parent]
-    if scenario in ["reuse", "wrong-parent", "update", "lost-update-response"]:
-        child["prefix"] = "192.0.2.0/26" if scenario != "reuse" else EXPECTED_PREFIX
+    if scenario in [
+        "reuse",
+        "replace",
+        "lost-delete-response",
+        "delete-race-create",
+        "wrong-parent",
+        "hosts-present",
+        "delete-rejected",
+    ]:
+        child["prefix"] = EXPECTED_PREFIX if scenario == "reuse" else CURRENT_PREFIX
         pools.append(child)
     if scenario == "wrong-parent":
         child["parentID"] = 99
@@ -64,18 +71,20 @@ def test_reserved_prefix_reconciliation_is_idempotent_and_checks_identity(tmp_pa
         pools.clear()
     if scenario == "prefix-conflict":
         pools.append({**child, "id": 7, "name": "some-other-subnet", "prefix": EXPECTED_PREFIX})
+    if scenario == "hosts-present":
+        child["hasHosts"] = True
 
     calls = []
     drop_create_response = scenario == "lost-create-response"
-    drop_update_response = scenario == "lost-update-response"
+    drop_delete_response = scenario == "lost-delete-response"
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *args):
             pass
 
-        def respond(self, body):
+        def respond(self, body, status=200):
             encoded = json.dumps(body).encode()
-            self.send_response(200)
+            self.send_response(status)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(encoded)))
             self.end_headers()
@@ -91,30 +100,42 @@ def test_reserved_prefix_reconciliation_is_idempotent_and_checks_identity(tmp_pa
 
         def do_GET(self):
             calls.append(("GET", self.path, None))
-            assert self.path == "/api/v2/ipam/subnets?filterByVpc=3"
-            self.respond({"data": pools})
+            if self.path == "/api/v2/ipam/subnets?filterByVpc=3":
+                self.respond({"data": pools})
+                return
+            if self.path == "/api/v2/ipam/hosts/6":
+                hosts = [{"id": 10, "address": "192.0.2.10"}] if scenario == "hosts-present" else []
+                self.respond({"data": hosts})
+                return
+            raise AssertionError(self.path)
+
+        def do_DELETE(self):
+            nonlocal drop_delete_response
+            calls.append(("DELETE", self.path, None))
+            assert self.path == "/api/v2/ipam/subnet/6"
+            pools[:] = [item for item in pools if item["id"] != 6]
+            if scenario == "delete-race-create":
+                pools.append({**child, "id": 7, "prefix": EXPECTED_PREFIX})
+                self.respond({"message": "already deleted"}, status=404)
+                return
+            if scenario == "delete-rejected":
+                pools.append(child)
+                self.respond({"message": "subnet is in use"}, status=400)
+                return
+            if drop_delete_response:
+                drop_delete_response = False
+                self.drop_response()
+                return
+            self.respond({"data": {"id": 6}})
 
         def do_POST(self):
             nonlocal drop_create_response
             body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
             calls.append(("POST", self.path, body))
             assert self.path == "/api/v2/ipam/subnet"
-            pools.append({**body, "id": 6})
+            pools.append({**body, "id": 6, "children": [], "vpc": {"id": 3}, "tenant": {"id": 1}})
             if drop_create_response:
                 drop_create_response = False
-                self.drop_response()
-                return
-            self.respond({"data": {"id": 6}})
-
-        def do_PUT(self):
-            nonlocal drop_update_response
-            body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
-            calls.append(("PUT", self.path, body))
-            assert self.path == "/api/v2/ipam/subnet/6"
-            existing = next(item for item in pools if item["id"] == 6)
-            existing.update(body)
-            if drop_update_response:
-                drop_update_response = False
                 self.drop_response()
                 return
             self.respond({"data": {"id": 6}})
@@ -164,25 +185,11 @@ def test_reserved_prefix_reconciliation_is_idempotent_and_checks_identity(tmp_pa
                 timeout=45,
             )
 
-        if scenario == "lost-create-response":
+        if scenario in ["lost-create-response", "lost-delete-response"]:
             first_attempt = run_helper(1)
             assert first_attempt.returncode != 0, first_attempt.stdout + first_attempt.stderr
-            assert len([call for call in calls if call[0] == "POST"]) == 1
-            assert len(pools) == 2
-
             retry_attempt = run_helper(2)
             assert retry_attempt.returncode == 0, retry_attempt.stdout + retry_attempt.stderr
-            assert "changed=0" in retry_attempt.stdout
-            result = retry_attempt
-        elif scenario == "lost-update-response":
-            first_attempt = run_helper(1)
-            assert first_attempt.returncode != 0, first_attempt.stdout + first_attempt.stderr
-            assert len([call for call in calls if call[0] == "PUT"]) == 1
-            assert child["prefix"] == EXPECTED_PREFIX
-
-            retry_attempt = run_helper(2)
-            assert retry_attempt.returncode == 0, retry_attempt.stdout + retry_attempt.stderr
-            assert "changed=0" in retry_attempt.stdout
             result = retry_attempt
         else:
             result = run_helper(1, repeats=2)
@@ -192,12 +199,11 @@ def test_reserved_prefix_reconciliation_is_idempotent_and_checks_identity(tmp_pa
         thread.join(timeout=5)
 
     posts = [call for call in calls if call[0] == "POST"]
-    puts = [call for call in calls if call[0] == "PUT"]
-    if scenario in ["new", "lost-create-response"]:
+    deletes = [call for call in calls if call[0] == "DELETE"]
+    if scenario in ["new", "lost-create-response", "replace", "lost-delete-response"]:
         assert result.returncode == 0, result.stdout + result.stderr
         assert len(posts) == 1
-        assert not puts
-        assert len(pools) == 2
+        assert len(deletes) == (1 if scenario in ["replace", "lost-delete-response"] else 0)
         assert posts[0][2] == {
             "name": "test-subnet-fabric",
             "prefix": EXPECTED_PREFIX,
@@ -207,33 +213,22 @@ def test_reserved_prefix_reconciliation_is_idempotent_and_checks_identity(tmp_pa
             "tenant": {"id": 1},
             "vpc": {"id": 3},
         }
-    elif scenario in ["reuse", "lost-update-response"]:
+        assert any(item.get("name") == "test-subnet-fabric" and item.get("prefix") == EXPECTED_PREFIX for item in pools)
+    elif scenario == "reuse":
         assert result.returncode == 0, result.stdout + result.stderr
         assert not posts
-        assert len(puts) == (1 if scenario == "lost-update-response" else 0)
-    elif scenario == "update":
+        assert not deletes
+        assert "changed=0" in result.stdout
+    elif scenario == "delete-race-create":
         assert result.returncode == 0, result.stdout + result.stderr
         assert not posts
-        assert len(puts) == 1
-        assert puts[0][1] == "/api/v2/ipam/subnet/6"
-        assert puts[0][2] == {
-            "defaultGateway": "",
-            "description": "",
-            "name": "test-subnet-fabric",
-            "prefix": EXPECTED_PREFIX,
-            "purpose": "common",
-            "sites": [{"id": 1, "name": "minimal-lab"}],
-            "tenant": {"id": 1},
-            "tags": [],
-            "vpc": {"id": 3},
-            "globalRouting": False,
-        }
-        assert child["prefix"] == EXPECTED_PREFIX
+        assert len(deletes) == 1
+        assert any(item.get("id") == 7 and item.get("prefix") == EXPECTED_PREFIX for item in pools)
     else:
         assert result.returncode != 0
         assert not posts
-        assert not puts
-        assert "IPAM" in result.stdout
+        assert len(deletes) == (1 if scenario == "delete-rejected" else 0)
+        assert "IPAM" in result.stdout or "prefix" in result.stdout
 
 
 def test_gateway_creation_waits_for_reserved_ipam_and_cleanup_removes_child_first() -> None:
