@@ -290,10 +290,10 @@
       ansible.builtin.set_fact:
         _cudn_next_owner_subnet_cidr: "{{ _cudn_evpn_next_owner.spec.ipv4Cidr | default('') }}"
         _cudn_next_owner_reserved_prefix: >-
-          {{ (_cudn_evpn_next_owner.spec.ipv4Cidr | ansible.utils.ipaddr('prefix') | int) + 2 }}
+          {{ (_cudn_evpn_next_owner.spec.ipv4Cidr | ansible.utils.ipaddr('prefix') | int) + 1 }}
         _cudn_next_owner_reserved_range: >-
           {{ _cudn_evpn_next_owner.spec.ipv4Cidr | ansible.utils.ipaddr('network') }}/{{
-             (_cudn_evpn_next_owner.spec.ipv4Cidr | ansible.utils.ipaddr('prefix') | int) + 2 }}
+             (_cudn_evpn_next_owner.spec.ipv4Cidr | ansible.utils.ipaddr('prefix') | int) + 1 }}
       when:
         - _cudn_owner_subnet_name == _deleting_subnet_name
         - (_cudn_evpn_next_owner | default({})).get('metadata', {}).get('name', '') | length > 0

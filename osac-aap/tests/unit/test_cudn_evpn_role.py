@@ -76,7 +76,7 @@ def _delete_tasks() -> list[dict]:
     return _flatten_tasks(_raw_delete_tasks())
 
 
-def _render_cudn(fabric_reserved_range: str = "192.0.2.0/26") -> dict:
+def _render_cudn(fabric_reserved_range: str = "192.0.2.0/25") -> dict:
     template_path = _role_path() / "templates" / "cudn.yaml.j2"
     template = Environment(undefined=StrictUndefined).from_string(template_path.read_text(encoding="utf-8"))
     rendered = template.render(
@@ -105,7 +105,7 @@ def _run_role_with_inputs(tmp_path: Path, input_overrides: dict) -> subprocess.C
         "template_parameters": {},
         "l2_vni": "10007",
         "l3_vni": "20007",
-        "fabric_reserved_range": "192.0.2.0/26",
+        "fabric_reserved_range": "192.0.2.0/25",
     }
     inputs.update(input_overrides)
     playbook = [
@@ -248,6 +248,7 @@ def test_cudn_template_separates_gateway_from_netris_reserved_range() -> None:
         "192.0.2.8/29",
         "192.0.2.16/28",
         "192.0.2.32/27",
+        "192.0.2.64/26",
     ]
     reserved_addresses = {
         address
@@ -264,6 +265,19 @@ def test_cudn_template_separates_gateway_from_netris_reserved_range() -> None:
 @pytest.mark.parametrize(
     ("reserved_range", "gateway", "reserved_subnets"),
     [
+        (
+            "192.0.2.0/25",
+            "192.0.2.1",
+            [
+                "192.0.2.0/32",
+                "192.0.2.2/31",
+                "192.0.2.4/30",
+                "192.0.2.8/29",
+                "192.0.2.16/28",
+                "192.0.2.32/27",
+                "192.0.2.64/26",
+            ],
+        ),
         (
             "192.0.2.0/26",
             "192.0.2.1",
@@ -575,6 +589,54 @@ def test_delete_owner_handoff_derives_gateway_ipam_template_data() -> None:
     assert template_variables["_evpn_fabric_ipam"] == (
         "{{ _cudn_next_owner_reserved_range | osac.templates.evpn_fabric_ipam }}"
     )
+
+
+def test_delete_owner_handoff_reserves_first_half_of_successor_subnet(tmp_path: Path) -> None:
+    tasks = _delete_tasks()
+    range_task = next(task for task in tasks if task.get("name") == "Calculate the successor EVPN reserved range")
+    playbook = tmp_path / "successor_fabric_range.yaml"
+    playbook.write_text(
+        yaml.safe_dump(
+            [
+                {
+                    "hosts": "localhost",
+                    "connection": "local",
+                    "gather_facts": False,
+                    "vars": {
+                        "_cudn_owner_subnet_name": "deleting-subnet",
+                        "_deleting_subnet_name": "deleting-subnet",
+                        "_cudn_evpn_next_owner": {
+                            "metadata": {"name": "successor-subnet"},
+                            "spec": {"ipv4Cidr": "192.0.2.0/24"},
+                        },
+                    },
+                    "tasks": [
+                        range_task,
+                        {
+                            "name": "Assert successor split",
+                            "ansible.builtin.assert": {
+                                "that": [
+                                    "_cudn_next_owner_reserved_prefix | int == 25",
+                                    "_cudn_next_owner_reserved_range == '192.0.2.0/25'",
+                                ]
+                            },
+                        },
+                    ],
+                }
+            ],
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    result = subprocess.run(
+        ["ansible-playbook", "--inventory", "localhost,", str(playbook)],
+        cwd=Path(__file__).resolve().parents[2],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=30,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 def test_existing_sibling_namespaces_are_backfilled_before_cudn_selector_migration() -> None:

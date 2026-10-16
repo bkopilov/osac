@@ -19,6 +19,8 @@
   ansible.builtin.set_fact:
     _fabric_ipam_parents: >-
       {{ _fabric_ipam_before.json.data | selectattr('id', 'equalto', ipam_subnet_id | int) | list }}
+    _fabric_ipam_named: >-
+      {{ _fabric_ipam_before.json.data | selectattr('name', 'equalto', subnet_name ~ '-fabric') | list }}
     _fabric_ipam_existing: >-
       {{ _fabric_ipam_before.json.data | selectattr('prefix', 'equalto', _fabric_reserved_range) | list }}
 
@@ -31,6 +33,57 @@
       - _fabric_ipam_parents[0].vpc.id | int == _parent_vpc.id | int
       - _fabric_ipam_parents[0].tenant.id | int == netris_tenant_id | int
     fail_msg: "Refusing to create a fabric prefix under an IPAM parent with a different Subnet/VPC identity."
+
+- name: Validate the existing reserved fabric prefix identity
+  ansible.builtin.assert:
+    that:
+      - _fabric_ipam_named | length <= 1
+      - _fabric_ipam_existing | length <= 1
+      - >-
+        _fabric_ipam_existing | length == 0 or
+        (_fabric_ipam_named | length == 1 and
+         _fabric_ipam_existing[0].id | int == _fabric_ipam_named[0].id | int)
+      - >-
+        _fabric_ipam_named | length == 0 or
+        _fabric_ipam_named[0].parentID | int == ipam_subnet_id | int
+      - >-
+        _fabric_ipam_named | length == 0 or
+        _fabric_ipam_named[0].vpc.id | int == _parent_vpc.id | int
+      - >-
+        _fabric_ipam_named | length == 0 or
+        _fabric_ipam_named[0].tenant.id | int == netris_tenant_id | int
+    fail_msg: >-
+      The existing reserved fabric IPAM subnet does not match this Subnet's name,
+      parent, VPC, and tenant identity. Refusing to update or create an IPAM prefix.
+
+- name: Update the existing reserved fabric prefix to the desired split
+  ansible.builtin.uri:
+    url: "{{ netris_controller_url }}/api/v2/ipam/subnet/{{ _fabric_ipam_named[0].id }}"
+    method: PUT
+    headers:
+      Cookie: "connect.sid={{ netris_session_cookie }}"
+    body_format: json
+    body:
+      defaultGateway: "{{ _fabric_ipam_named[0].defaultGateway | default('') }}"
+      description: "{{ _fabric_ipam_named[0].description | default('') }}"
+      name: "{{ subnet_name }}-fabric"
+      prefix: "{{ _fabric_reserved_range }}"
+      purpose: "{{ _fabric_ipam_named[0].purpose | default('common') }}"
+      sites: "{{ _fabric_ipam_named[0].sites | default([{'id': netris_site_id | int}]) }}"
+      tenant:
+        id: "{{ _fabric_ipam_named[0].tenant.id | int }}"
+      tags: "{{ _fabric_ipam_named[0].tags | default([]) }}"
+      vpc:
+        id: "{{ _fabric_ipam_named[0].vpc.id | int }}"
+      globalRouting: "{{ _fabric_ipam_named[0].globalRouting | default(false) | bool }}"
+    return_content: true
+    status_code: [200, 204]
+    timeout: "{{ netris_timeout | default(30) }}"
+    validate_certs: "{{ netris_validate_certs | default(true) }}"
+  when:
+    - _fabric_ipam_named | length == 1
+    - _fabric_ipam_named[0].prefix != _fabric_reserved_range
+  no_log: true
 
 - name: Create the child IPAM subnet for the reserved fabric range
   ansible.builtin.uri:
@@ -54,7 +107,9 @@
     status_code: [200, 201]
     timeout: "{{ netris_timeout | default(30) }}"
     validate_certs: "{{ netris_validate_certs | default(true) }}"
-  when: _fabric_ipam_existing | length == 0
+  when:
+    - _fabric_ipam_named | length == 0
+    - _fabric_ipam_existing | length == 0
   no_log: true
 
 - name: Read back the reserved fabric prefix
