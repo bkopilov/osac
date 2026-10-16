@@ -165,7 +165,7 @@ def test_vnet_update_body_preserves_existing_fields_and_replaces_gateway(
                         "netris_vnet_detail": existing_vnet,
                         "_gateway_cidr": "192.0.2.1/24",
                         "_dhcp_start": "192.0.2.3",
-                        "_dhcp_end": "192.0.2.126",
+                        "_dhcp_end": "192.0.2.127",
                         "is_cudn_evpn": True,
                         "_evpn_gateway_contract_matches": False,
                         "_expects_nested_dhcp": expects_nested_dhcp,
@@ -192,7 +192,7 @@ def test_vnet_update_body_preserves_existing_fields_and_replaces_gateway(
                             "ansible.builtin.assert": {
                                 "that": [
                                     "_vnet_update_body.gateways[0].dhcp.start == '192.0.2.3'",
-                                    "_vnet_update_body.gateways[0].dhcp.end == '192.0.2.126'",
+                                    "_vnet_update_body.gateways[0].dhcp.end == '192.0.2.127'",
                                     "_vnet_update_body.gateways[0].dhcp.optionSet.id | int == 31",
                                     "_vnet_update_body.gateways[0].dhcpLeaseCount | int == 61",
                                     "'dhcpStartIp' not in _vnet_update_body.gateways[0]",
@@ -205,7 +205,7 @@ def test_vnet_update_body_preserves_existing_fields_and_replaces_gateway(
                             "ansible.builtin.assert": {
                                 "that": [
                                     "_vnet_update_body.gateways[0].dhcpStartIp == '192.0.2.3'",
-                                    "_vnet_update_body.gateways[0].dhcpEndIp == '192.0.2.126'",
+                                    "_vnet_update_body.gateways[0].dhcpEndIp == '192.0.2.127'",
                                     "'dhcp' not in _vnet_update_body.gateways[0]",
                                 ]
                             },
@@ -324,13 +324,53 @@ def test_fabric_outputs_are_validated_before_configmap_publication() -> None:
 
 
 @pytest.mark.parametrize(
+    ("subnet_cidr", "fabric_range", "gateway_cidr", "dhcp_start", "dhcp_end"),
+    [
+        ("192.0.2.0/25", "192.0.2.0/26", "192.0.2.1/25", "192.0.2.3", "192.0.2.63"),
+        ("192.0.2.0/29", "192.0.2.0/30", "192.0.2.1/29", "192.0.2.3", "192.0.2.3"),
+    ],
+    ids=["/25-subnet", "/29-minimum"],
+)
+def test_evpn_gateway_keeps_full_subnet_and_splits_dhcp_pool(
+    tmp_path: Path,
+    subnet_cidr: str,
+    fabric_range: str,
+    gateway_cidr: str,
+    dhcp_start: str,
+    dhcp_end: str,
+) -> None:
+    result = _run_fabric_output_validation(
+        tmp_path,
+        subnet_ipv4_cidr=subnet_cidr,
+        vpc={"vni": 20007},
+        vnet={
+            "vxlanID": 10007,
+            "gateways": [
+                {
+                    "prefix": gateway_cidr,
+                    "dhcpEnabled": True,
+                    "dhcpStartIp": dhcp_start,
+                    "dhcpEndIp": dhcp_end,
+                }
+            ],
+        },
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert f'"reserved_range": "{fabric_range}"' in result.stdout
+    assert f'"gateway_cidr": "{gateway_cidr}"' in result.stdout
+    assert f'"dhcp_start": "{dhcp_start}"' in result.stdout
+    assert f'"dhcp_end": "{dhcp_end}"' in result.stdout
+
+
+@pytest.mark.parametrize(
     ("gateway", "expected_match"),
     [
         (
             {
                 "prefix": "192.0.2.1/24",
                 "dhcpEnabled": True,
-                "dhcp": {"start": "192.0.2.3", "end": "192.0.2.126"},
+                "dhcp": {"start": "192.0.2.3", "end": "192.0.2.127"},
             },
             True,
         ),
@@ -339,7 +379,7 @@ def test_fabric_outputs_are_validated_before_configmap_publication() -> None:
                 "prefix": "192.0.2.1/24",
                 "dhcpEnabled": True,
                 "dhcpStartIp": "192.0.2.3",
-                "dhcpEndIp": "192.0.2.126",
+                "dhcpEndIp": "192.0.2.127",
             },
             True,
         ),
@@ -392,7 +432,7 @@ def test_existing_netris_gateway_contract_is_idempotent_for_nested_and_flat_dhcp
                         "netris_vnet_detail": {"gateways": [gateway]},
                         "_gateway_cidr": "192.0.2.1/24",
                         "_dhcp_start": "192.0.2.3",
-                        "_dhcp_end": "192.0.2.126",
+                        "_dhcp_end": "192.0.2.127",
                         "is_cudn_evpn": True,
                     },
                     "tasks": [
@@ -497,11 +537,11 @@ def test_invalid_fabric_output_fails_before_publication(
 @pytest.mark.parametrize(
     "gateway",
     [
-        {"prefix": "192.0.2.1/24", "dhcpEnabled": True, "dhcpStartIp": "192.0.2.3", "dhcpEndIp": "192.0.2.126"},
+        {"prefix": "192.0.2.1/24", "dhcpEnabled": True, "dhcpStartIp": "192.0.2.3", "dhcpEndIp": "192.0.2.127"},
         {
             "prefix": "192.0.2.1/24",
             "dhcpEnabled": True,
-            "dhcp": {"start": "192.0.2.3", "end": "192.0.2.126", "optionSet": {"id": 1}},
+            "dhcp": {"start": "192.0.2.3", "end": "192.0.2.127", "optionSet": {"id": 1}},
         },
     ],
     ids=["flat", "nested"],
@@ -521,21 +561,21 @@ def test_valid_fabric_outputs_pass_validation(tmp_path: Path, gateway: dict) -> 
     assert '"reserved_range": "192.0.2.0/25"' in result.stdout
     assert '"gateway_cidr": "192.0.2.1/24"' in result.stdout
     assert '"dhcp_start": "192.0.2.3"' in result.stdout
-    assert '"dhcp_end": "192.0.2.126"' in result.stdout
+    assert '"dhcp_end": "192.0.2.127"' in result.stdout
 
 
 @pytest.mark.parametrize(
     "gateway_changes",
     [
-        {"dhcp": {"start": "192.0.2.2", "end": "192.0.2.126"}},
+        {"dhcp": {"start": "192.0.2.2", "end": "192.0.2.127"}},
         {"dhcp": {"start": "192.0.2.2", "end": "192.0.2.63"}},
         {"prefix": "192.0.2.1/26"},
         {"dhcpEnabled": False},
         {"dhcp": {}},
         {
-            "dhcp": {"start": "192.0.2.2", "end": "192.0.2.126"},
+            "dhcp": {"start": "192.0.2.2", "end": "192.0.2.127"},
             "dhcpStartIp": "192.0.2.3",
-            "dhcpEndIp": "192.0.2.126",
+            "dhcpEndIp": "192.0.2.127",
         },
     ],
     ids=["wrong-start", "wrong-end", "wrong-prefix", "dhcp-disabled", "missing-range", "conflicting-flat-range"],
@@ -544,7 +584,7 @@ def test_invalid_nested_gateway_fails_before_publication(tmp_path: Path, gateway
     gateway = {
         "prefix": "192.0.2.1/24",
         "dhcpEnabled": True,
-        "dhcp": {"start": "192.0.2.3", "end": "192.0.2.126"},
+        "dhcp": {"start": "192.0.2.3", "end": "192.0.2.127"},
     }
     gateway.update(gateway_changes)
     result = _run_fabric_output_validation(
@@ -567,32 +607,47 @@ def test_non_evpn_netris_keeps_the_existing_subnet_gateway_and_dhcp_pool(tmp_pat
     assert '"dhcp_end": "192.0.2.6"' in result.stdout
 
 
-def test_smallest_cudn_subnet_leaves_space_for_gateway_ovn_and_dhcp(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("subnet_cidr", "gateway_cidr", "fabric_range", "dhcp_start", "dhcp_end"),
+    [
+        ("192.0.2.0/28", "192.0.2.1/28", "192.0.2.0/29", "192.0.2.3", "192.0.2.7"),
+        ("192.0.2.0/29", "192.0.2.1/29", "192.0.2.0/30", "192.0.2.3", "192.0.2.3"),
+    ],
+    ids=["/28", "/29-minimum"],
+)
+def test_smallest_cudn_subnet_leaves_space_for_gateway_ovn_and_dhcp(
+    tmp_path: Path,
+    subnet_cidr: str,
+    gateway_cidr: str,
+    fabric_range: str,
+    dhcp_start: str,
+    dhcp_end: str,
+) -> None:
     result = _run_fabric_output_validation(
         tmp_path,
         vnet={
             "vxlanID": 10007,
             "gateways": [
                 {
-                "prefix": "192.0.2.1/28",
+                    "prefix": gateway_cidr,
                     "dhcpEnabled": True,
-                    "dhcpStartIp": "192.0.2.3",
-                    "dhcpEndIp": "192.0.2.6",
+                    "dhcpStartIp": dhcp_start,
+                    "dhcpEndIp": dhcp_end,
                 }
             ],
         },
         vpc={"vni": 20007},
-        subnet_ipv4_cidr="192.0.2.0/28",
+        subnet_ipv4_cidr=subnet_cidr,
     )
 
     assert result.returncode == 0, result.stdout + result.stderr
-    assert '"reserved_range": "192.0.2.0/29"' in result.stdout
-    assert '"gateway_cidr": "192.0.2.1/28"' in result.stdout
-    assert '"dhcp_start": "192.0.2.3"' in result.stdout
-    assert '"dhcp_end": "192.0.2.6"' in result.stdout
+    assert f'"reserved_range": "{fabric_range}"' in result.stdout
+    assert f'"gateway_cidr": "{gateway_cidr}"' in result.stdout
+    assert f'"dhcp_start": "{dhcp_start}"' in result.stdout
+    assert f'"dhcp_end": "{dhcp_end}"' in result.stdout
 
 
-@pytest.mark.parametrize("subnet_ipv4_cidr", ["", "not-a-cidr", "192.0.2.1/24", "192.0.2.0/29"])
+@pytest.mark.parametrize("subnet_ipv4_cidr", ["", "not-a-cidr", "192.0.2.1/24", "192.0.2.0/30"])
 def test_subnet_cidr_must_support_a_disjoint_fabric_pool(tmp_path: Path, subnet_ipv4_cidr: str) -> None:
     result = _run_fabric_output_validation(
         tmp_path,
@@ -607,5 +662,5 @@ def test_subnet_cidr_must_support_a_disjoint_fabric_pool(tmp_path: Path, subnet_
     )
 
     assert result.returncode != 0
-    assert "must have a canonical IPv4 CIDR with prefix length /28 or shorter" in result.stdout
+    assert "must have a canonical IPv4 CIDR with prefix length /29 or shorter" in result.stdout
     assert "Confirm outputs passed validation" not in result.stdout

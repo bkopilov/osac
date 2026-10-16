@@ -20,16 +20,16 @@
       - subnet_ipv4_cidr is string
       - subnet_ipv4_cidr | ansible.utils.ipaddr('version') == 4
       - subnet_ipv4_cidr | ansible.utils.ipaddr('network/prefix') == subnet_ipv4_cidr
-      - subnet_ipv4_cidr | ansible.utils.ipaddr('prefix') | int <= 28
+      - subnet_ipv4_cidr | ansible.utils.ipaddr('prefix') | int <= 29
     fail_msg: >-
-      Subnet '{{ subnet_name }}' must have a canonical IPv4 CIDR with prefix length /28 or shorter
+      Subnet '{{ subnet_name }}' must have a canonical IPv4 CIDR with prefix length /29 or shorter
       so the Netris fabric pool has addresses for the gateway, OVN management port, and DHCP clients.
   when: is_cudn_evpn
 
 - name: Calculate the Netris fabric pool prefix
   ansible.builtin.set_fact:
-    # Reserve the first of two equal blocks. For a /24 Subnet, this gives the
-    # /25 block for the gateway, OVN management port, and DHCP clients.
+    # Bound DHCP to the first of two equal address blocks. For a /24 Subnet,
+    # this gives the first /25; the Netris gateway remains on the full /24.
     _fabric_reserved_prefix: "{{ (subnet_ipv4_cidr | ansible.utils.ipaddr('prefix') | int) + 1 }}"
   when: is_cudn_evpn
 
@@ -115,15 +115,16 @@
     _gateway_ip: "{{ subnet_ipv4_cidr | ansible.utils.ipaddr('next_usable') }}"
     _gateway_cidr: >-
       {{ subnet_ipv4_cidr | ansible.utils.ipaddr('next_usable') }}/{{ subnet_ipv4_cidr | ansible.utils.ipaddr('prefix') }}
-    _last_usable: "{{ _fabric_reserved_range | ansible.utils.ipaddr('last_usable') }}"
   when: is_cudn_evpn
 
 - name: Compute DHCP range inside the reserved EVPN fabric pool
   ansible.builtin.set_fact:
     # The gateway uses the first usable address and OVN's management port the
-    # second; DHCP clients start at the third usable address.
+    # second; DHCP clients start at the third address. Include the first-half
+    # boundary because the configured subnet remains the full Subnet CIDR.
+    # This leaves one DHCP lease (.3-.3) for a /29 Subnet.
     _dhcp_start: "{{ _fabric_reserved_range | ansible.utils.ipaddr('3') | ansible.utils.ipaddr('address') }}"
-    _dhcp_end: "{{ _last_usable }}"
+    _dhcp_end: "{{ _fabric_reserved_range | ansible.utils.ipaddr('broadcast') }}"
   when: is_cudn_evpn
 
 - name: Display Subnet information
