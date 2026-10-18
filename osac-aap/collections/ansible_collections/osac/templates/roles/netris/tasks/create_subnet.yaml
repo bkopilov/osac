@@ -48,15 +48,25 @@
       - "osac.openshift.io/virtualnetwork-uuid={{ subnet_virtual_network_id }}"
   register: _vn_lookup
 
-- name: Fail if VirtualNetwork CR not found
+- name: Require exactly one parent VirtualNetwork CR
   ansible.builtin.fail:
     msg: >-
-      VirtualNetwork with UUID '{{ subnet_virtual_network_id }}' not found in namespace '{{ subnet.metadata.namespace }}'.
-  when: _vn_lookup.resources | length == 0
+      Expected exactly one VirtualNetwork with UUID '{{ subnet_virtual_network_id }}' in
+      namespace '{{ subnet.metadata.namespace }}'; refusing to use an ambiguous parent.
+  when: _vn_lookup.resources | length != 1
 
-- name: Set VirtualNetwork CR name
+- name: Set VirtualNetwork identity
   ansible.builtin.set_fact:
     subnet_virtual_network_name: "{{ _vn_lookup.resources[0].metadata.name }}"
+    subnet_virtual_network_vpc_id: "{{ _vn_lookup.resources[0].status.backendNetworkId | default('') }}"
+
+- name: Validate the parent VPC ID from VirtualNetwork status
+  ansible.builtin.assert:
+    that:
+      - subnet_virtual_network_vpc_id | string | trim is match('^[1-9][0-9]*$')
+    fail_msg: >-
+      VirtualNetwork '{{ subnet_virtual_network_name }}' has no positive Netris VPC ID in
+      status.backendNetworkId; refusing to provision its Subnet against a name-only match.
 
 - name: Look up parent VPC by name
   ansible.builtin.include_role:
@@ -64,6 +74,8 @@
     tasks_from: read
   vars:
     vpc_name: "{{ subnet_virtual_network_name }}"
+    vpc_id: "{{ subnet_virtual_network_vpc_id }}"
+    vpc_tenant_id: "{{ netris_tenant_id }}"
 
 - name: Set parent VPC
   ansible.builtin.set_fact:
@@ -182,6 +194,17 @@
   ansible.builtin.include_role:
     name: netris.controller.vnet
     tasks_from: read_by_id
+
+- name: Validate V-Net ownership before gateway reconciliation
+  ansible.builtin.assert:
+    that:
+      - netris_vnet_detail is mapping
+      - netris_vnet_detail.get('vpc', {}).get('id', 0) | int == _parent_vpc.id | int
+      - netris_vnet_detail.get('tenant', {}).get('id', 0) | int == netris_tenant_id | int
+    fail_msg: >-
+      Netris returned V-Net ID '{{ vnet_id }}' with a different VPC or tenant than
+      Subnet '{{ subnet_name }}'. Refusing to update its gateway or DHCP settings.
+  when: is_cudn_evpn
 
 - name: Check whether existing V-Net matches EVPN gateway contract
   ansible.builtin.set_fact:

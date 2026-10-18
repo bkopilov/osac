@@ -56,3 +56,15 @@ argument_specs:
         type: str
         required: true
         description: "Name of the IPAM subnet to delete."
+      ipam_cidr:
+        type: str
+        description: "Optional CIDR identity for the subnet to delete."
+      ipam_vpc_id:
+        type: int
+        description: "Optional VPC identity for the subnet to delete."
+      ipam_tenant_id:
+        type: int
+        description: "Optional tenant identity for the subnet to delete."
+      ipam_parent_id:
+        type: int
+        description: "Optional parent IPAM subnet ID for a child allocation."
