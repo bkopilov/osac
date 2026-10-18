@@ -422,13 +422,10 @@
             | selectattr('type', 'equalto', 'Ready') | list | length == 0) and
             (_cudn_successor_status.resources[0].status.conditions | default([])
             | selectattr('type', 'in', ['TransportAccepted', 'NetworkCreated', 'NetworkAllocationSucceeded'])
-            | selectattr('status', 'equalto', 'True') | map(attribute='type')
-            | unique | list | length == 3) and
-            (_cudn_successor_status.resources[0].status.conditions | default([])
-            | selectattr('type', 'in', ['TransportAccepted', 'NetworkCreated', 'NetworkAllocationSucceeded'])
+            | selectattr('status', 'equalto', 'True')
             | selectattr('observedGeneration', 'defined')
-            | selectattr('observedGeneration', 'lt', _cudn_successor_status.resources[0].metadata.generation)
-            | list | length == 0)
+            | selectattr('observedGeneration', 'ge', _cudn_successor_status.resources[0].metadata.generation)
+            | map(attribute='type') | unique | list | length == 3)
           )
         )
       retries: 30

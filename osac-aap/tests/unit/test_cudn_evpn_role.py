@@ -427,7 +427,7 @@ def test_native_evpn_conditions_require_acceptance_creation_and_allocation(chang
           {"type": "NetworkAllocationSucceeded", "status": "True"}], False),
         ([{"type": "TransportAccepted", "status": "True"},
           {"type": "NetworkCreated", "status": "True"},
-          {"type": "NetworkAllocationSucceeded", "status": "True"}], True),
+          {"type": "NetworkAllocationSucceeded", "status": "True"}], False),
         ([{"type": "TransportAccepted", "status": "True"},
           {"type": "NetworkCreated", "status": "False"},
           {"type": "NetworkAllocationSucceeded", "status": "True"}], False),
@@ -437,6 +437,9 @@ def test_native_evpn_conditions_require_acceptance_creation_and_allocation(chang
         ([{"type": "TransportAccepted", "status": "True", "observedGeneration": 4},
           {"type": "NetworkCreated", "status": "True", "observedGeneration": 4},
           {"type": "NetworkAllocationSucceeded", "status": "True", "observedGeneration": 4}], True),
+        ([{"type": "TransportAccepted", "status": "True", "observedGeneration": 4},
+          {"type": "NetworkCreated", "status": "True"},
+          {"type": "NetworkAllocationSucceeded", "status": "True", "observedGeneration": 4}], False),
     ],
 )
 def test_owner_handoff_wait_accepts_native_cudn_conditions(conditions: list[dict], expected: bool) -> None:

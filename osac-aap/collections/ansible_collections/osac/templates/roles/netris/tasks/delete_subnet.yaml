@@ -52,48 +52,45 @@
       id: "{{ subnet_virtual_network_vpc_id | int }}"
   when: is_cudn_evpn
 
-- name: Ensure Netris auth before reading parent IPAM
+- name: Find the exact IPAM parent for this Subnet
   ansible.builtin.include_role:
-    name: netris.controller.auth
+    name: netris.controller.ipam
+    tasks_from: find_subnet_by_identity
+  vars:
+    ipam_name: "{{ subnet_name }}"
+    ipam_cidr: "{{ subnet_ipv4_cidr }}"
+    ipam_vpc_id: "{{ _parent_vpc.id }}"
+    ipam_tenant_id: "{{ netris_tenant_id }}"
+  when: is_cudn_evpn
+
+- name: Preserve the exact parent IPAM identity
+  ansible.builtin.set_fact:
+    _subnet_ipam_parent: "{{ ipam_subnet_by_identity }}"
+  when: is_cudn_evpn
+
+- name: Look for a reserved child when its parent IPAM subnet is missing
+  ansible.builtin.include_role:
+    name: netris.controller.ipam
+    tasks_from: find_subnet_by_identity
+  vars:
+    ipam_name: "{{ subnet_name }}-fabric"
+    ipam_vpc_id: "{{ _parent_vpc.id }}"
+    ipam_tenant_id: "{{ netris_tenant_id }}"
   when:
     - is_cudn_evpn
-    - netris_session_cookie is not defined
+    - _subnet_ipam_parent is not mapping
 
-- name: Read IPAM subnets in the parent VPC before deleting EVPN child
-  ansible.builtin.uri:
-    url: "{{ netris_controller_url }}/api/v2/ipam/subnets?filterByVpc={{ _parent_vpc.id }}"
-    method: GET
-    force: true
-    headers:
-      Cookie: "connect.sid={{ netris_session_cookie }}"
-    return_content: true
-    status_code: 200
-    timeout: "{{ netris_timeout | default(30) }}"
-    validate_certs: "{{ netris_validate_certs | default(true) }}"
-    ca_path: "{{ netris_ca_path | default(omit, true) }}"
-  register: _subnet_ipam_list
-  when: is_cudn_evpn
-  no_log: true
-
-- name: Find the exact IPAM parent for this Subnet
-  ansible.builtin.set_fact:
-    _subnet_ipam_parents: >-
-      {{ _subnet_ipam_list.json.data | default([])
-         | selectattr('name', 'equalto', subnet_name)
-         | selectattr('prefix', 'equalto', subnet_ipv4_cidr)
-         | selectattr('vpc.id', 'equalto', _parent_vpc.id | int)
-         | selectattr('tenant.id', 'equalto', netris_tenant_id | int)
-         | list }}
-  when: is_cudn_evpn
-
-- name: Fail if the IPAM parent identity is ambiguous
+- name: Fail if a reserved child remains without its parent identity
   ansible.builtin.assert:
     that:
-      - _subnet_ipam_parents | length <= 1
+      - ipam_subnet_by_identity is not mapping
     fail_msg: >-
-      Multiple Netris IPAM parents match Subnet '{{ subnet_name }}', CIDR '{{ subnet_ipv4_cidr }}',
-      VPC '{{ _parent_vpc.id }}', and tenant '{{ netris_tenant_id }}'. Refusing to delete a child.
-  when: is_cudn_evpn
+      The parent IPAM subnet '{{ subnet_name }}' is missing while a reserved child
+      IPAM subnet '{{ subnet_name }}-fabric' remains in VPC '{{ _parent_vpc.id }}'
+      and tenant '{{ netris_tenant_id }}'. Refusing cleanup without a verifiable parent.
+  when:
+    - is_cudn_evpn
+    - _subnet_ipam_parent is not mapping
 
 - name: Delete V-Net from Netris controller
   ansible.builtin.include_role:
@@ -121,10 +118,10 @@
     ipam_name: "{{ subnet_name }}-fabric"
     ipam_vpc_id: "{{ _parent_vpc.id }}"
     ipam_tenant_id: "{{ netris_tenant_id }}"
-    ipam_parent_id: "{{ _subnet_ipam_parents[0].id }}"
+    ipam_parent_id: "{{ _subnet_ipam_parent.id }}"
   when:
     - is_cudn_evpn
-    - _subnet_ipam_parents | length == 1
+    - _subnet_ipam_parent is mapping
 
 - name: Delete IPAM subnet from Netris controller
   ansible.builtin.include_role:

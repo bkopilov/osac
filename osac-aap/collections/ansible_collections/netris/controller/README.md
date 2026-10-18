@@ -173,6 +173,12 @@ VPC/tenant ID supplied by the caller. Multiple exact matches fail as ambiguous.
 
 **Create output:** `ipam_subnet_id`, `ipam_alloc_id`, `ipam_already_existed`
 
+**Identity lookup variables:** `ipam_name`, `ipam_vpc_id`, and
+`ipam_tenant_id` (required), plus optional `ipam_cidr` and `ipam_parent_id`, for
+`tasks_from: find_subnet_by_identity`.
+The lookup sets `ipam_subnet_by_identity` to the exact match or `none`; multiple
+matches fail as ambiguous.
+
 **Delete variables:**
 - `ipam_name` (required) — Name of the IPAM subnet to delete (also deletes the `<name>-alloc` allocation)
 - `ipam_cidr`, `ipam_vpc_id`, `ipam_tenant_id`, `ipam_parent_id` — Optional identity constraints; multiple matches fail as ambiguous

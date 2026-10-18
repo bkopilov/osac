@@ -12,6 +12,7 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
 TASKS = ROOT / "collections/ansible_collections/osac/templates/roles/netris/tasks"
+IPAM_ROLE_TASKS = ROOT / "collections/ansible_collections/netris/controller/roles/ipam/tasks"
 CURRENT_PREFIX = "192.0.2.0/26"
 EXPECTED_PREFIX = "192.0.2.0/25"
 
@@ -241,3 +242,67 @@ def test_gateway_creation_waits_for_reserved_ipam_and_cleanup_removes_child_firs
     names = [task["name"] for task in tasks]
     assert names.index("Delete V-Net from Netris controller") < names.index("Delete the reserved EVPN fabric IPAM subnet")
     assert names.index("Delete the reserved EVPN fabric IPAM subnet") < names.index("Delete IPAM subnet from Netris controller")
+
+
+def test_every_fabric_ipam_request_uses_the_configured_ca_path() -> None:
+    tasks = yaml.safe_load((TASKS / "ensure_fabric_ipam.yaml").read_text())
+    uri_tasks = [task["ansible.builtin.uri"] for task in tasks if "ansible.builtin.uri" in task]
+
+    assert uri_tasks
+    assert all(uri.get("ca_path") == "{{ netris_ca_path | default(omit, true) }}" for uri in uri_tasks)
+
+
+def test_subnet_delete_resolves_ipam_parent_through_identity_scoped_role() -> None:
+    tasks = yaml.safe_load((TASKS / "delete_subnet.yaml").read_text())
+    lookup = next(task for task in tasks if task.get("name") == "Find the exact IPAM parent for this Subnet")
+    assert lookup["ansible.builtin.include_role"] == {
+        "name": "netris.controller.ipam",
+        "tasks_from": "find_subnet_by_identity",
+    }
+    assert lookup["vars"] == {
+        "ipam_name": "{{ subnet_name }}",
+        "ipam_cidr": "{{ subnet_ipv4_cidr }}",
+        "ipam_vpc_id": "{{ _parent_vpc.id }}",
+        "ipam_tenant_id": "{{ netris_tenant_id }}",
+    }
+
+    child_delete = next(task for task in tasks if task.get("name") == "Delete the reserved EVPN fabric IPAM subnet")
+    assert child_delete["vars"]["ipam_parent_id"] == "{{ _subnet_ipam_parent.id }}"
+    assert "_subnet_ipam_parent is mapping" in child_delete["when"]
+
+    orphan_lookup = next(
+        task for task in tasks if task.get("name") == "Look for a reserved child when its parent IPAM subnet is missing"
+    )
+    assert orphan_lookup["vars"] == {
+        "ipam_name": "{{ subnet_name }}-fabric",
+        "ipam_vpc_id": "{{ _parent_vpc.id }}",
+        "ipam_tenant_id": "{{ netris_tenant_id }}",
+    }
+    orphan_guard = next(
+        task for task in tasks if task.get("name") == "Fail if a reserved child remains without its parent identity"
+    )
+    assert orphan_guard["ansible.builtin.assert"]["that"] == ["ipam_subnet_by_identity is not mapping"]
+
+
+def test_ipam_parent_identity_lookup_filters_and_rejects_ambiguity() -> None:
+    tasks = yaml.safe_load((IPAM_ROLE_TASKS / "find_subnet_by_identity.yaml").read_text())
+    query = next(task for task in tasks if task.get("name") == "Query IPAM subnets for the requested identity")
+    assert query["ansible.builtin.uri"]["force"] is True
+
+    find = next(task for task in tasks if task.get("name") == "Find IPAM subnets matching the supplied identity")
+    expression = find["ansible.builtin.set_fact"]["ipam_subnets_by_identity"]
+    assert "selectattr('name', 'equalto', ipam_name)" in expression
+    assert "selectattr('vpc.id', 'equalto', ipam_vpc_id | int)" in expression
+    assert "selectattr('tenant.id', 'equalto', ipam_tenant_id | int)" in expression
+
+    cidr_filter = next(task for task in tasks if task.get("name") == "Filter IPAM subnets by CIDR")
+    assert cidr_filter["when"] == "ipam_cidr is defined"
+    assert "selectattr('prefix', 'equalto', ipam_cidr)" in cidr_filter["ansible.builtin.set_fact"][
+        "ipam_subnets_by_identity"
+    ]
+    parent_filter = next(task for task in tasks if task.get("name") == "Filter IPAM subnets by parent")
+    assert parent_filter["when"] == "ipam_parent_id is defined"
+
+    ambiguity = next(task for task in tasks if task.get("name") == "Fail if the IPAM subnet identity is ambiguous")
+    assert ambiguity["ansible.builtin.assert"]["that"] == ["ipam_subnets_by_identity | length <= 1"]
+    assert "ipam_cidr | default('unspecified')" in ambiguity["ansible.builtin.assert"]["fail_msg"]
