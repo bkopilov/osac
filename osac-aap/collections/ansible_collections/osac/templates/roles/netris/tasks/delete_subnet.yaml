@@ -45,7 +45,6 @@
       VirtualNetwork '{{ subnet_virtual_network_name }}' has no positive Netris VPC ID in
       status.backendNetworkId; refusing to delete Subnet resources by name alone.
   when: is_cudn_evpn
-  when: is_cudn_evpn
 
 - name: Set parent VPC
   ansible.builtin.set_fact:
