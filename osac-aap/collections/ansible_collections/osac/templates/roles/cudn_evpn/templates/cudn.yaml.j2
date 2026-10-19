@@ -26,6 +26,7 @@ spec:
         - "{{ _evpn_fabric_ipam.gateway_ip }}"
       infrastructureSubnets:
         - "{{ _evpn_fabric_ipam.gateway_infrastructure_subnet }}"
+        - "{{ _evpn_fabric_ipam.management_infrastructure_subnet }}"
       reservedSubnets:
 {% for reserved_subnet in _evpn_fabric_ipam.reserved_subnets %}
         - "{{ reserved_subnet }}"

@@ -1,4 +1,4 @@
-"""Helpers for reserving Netris EVPN gateway space in a CUDN."""
+"""Helpers for reserving Netris EVPN infrastructure space in a CUDN."""
 
 from __future__ import annotations
 
@@ -9,12 +9,11 @@ from ansible.errors import AnsibleFilterError
 
 
 def evpn_fabric_ipam(value: Any) -> dict[str, Any]:
-    """Split the Netris reserved pool around its first usable gateway address.
+    """Split the Netris reserved pool around the gateway and OVN management IP.
 
-    Netris uses the first usable address in the reserved pool as its gateway.
-    OVN-Kubernetes reserves the same address for the CUDN gateway, so it must
-    be declared as infrastructure and removed from reservedSubnets to avoid
-    allocating the same address twice.
+    The first usable address is the Netris gateway and the second is the OVN
+    management address. Declare both as infrastructure. Leave the third and
+    later addresses in reservedSubnets so OVN cannot allocate Netris DHCP IPs.
     """
     if not isinstance(value, str):
         raise AnsibleFilterError(
@@ -31,15 +30,24 @@ def evpn_fabric_ipam(value: Any) -> dict[str, Any]:
 
     if network.version != 4 or network.prefixlen > 30:
         raise AnsibleFilterError(
-            "fabric_reserved_range must be an IPv4 CIDR with room for a gateway and DHCP address; "
+            "fabric_reserved_range must be an IPv4 CIDR with room for a gateway, "
+            "OVN management address, and DHCP address; "
             "No Kubernetes resources were changed"
         )
 
     gateway = ipaddress.IPv4Address(int(network.network_address) + 1)
-    gateway_network = ipaddress.ip_network(f"{gateway}/32")
-    reserved_subnets = sorted(
-        network.address_exclude(gateway_network), key=lambda subnet: int(subnet.network_address)
-    )
+    management_ip = ipaddress.IPv4Address(int(network.network_address) + 2)
+    infrastructure_subnets = [ipaddress.ip_network(f"{address}/32") for address in (gateway, management_ip)]
+    reserved_subnets = [network]
+    for infrastructure_subnet in infrastructure_subnets:
+        remaining_subnets = []
+        for subnet in reserved_subnets:
+            if infrastructure_subnet.subnet_of(subnet):
+                remaining_subnets.extend(subnet.address_exclude(infrastructure_subnet))
+            else:
+                remaining_subnets.append(subnet)
+        reserved_subnets = remaining_subnets
+    reserved_subnets.sort(key=lambda subnet: int(subnet.network_address))
     if len(reserved_subnets) > 25:
         raise AnsibleFilterError(
             f"fabric_reserved_range {network} requires {len(reserved_subnets)} reservedSubnets entries "
@@ -49,6 +57,7 @@ def evpn_fabric_ipam(value: Any) -> dict[str, Any]:
     return {
         "gateway_ip": str(gateway),
         "gateway_infrastructure_subnet": f"{gateway}/32",
+        "management_infrastructure_subnet": f"{management_ip}/32",
         "reserved_subnets": [str(subnet) for subnet in reserved_subnets],
     }
 

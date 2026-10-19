@@ -216,7 +216,7 @@ def test_missing_fabric_range_fails_argument_validation_before_namespace_write(t
     assert "Create tenant workload namespace" not in output
 
 
-def test_cudn_template_separates_gateway_from_netris_reserved_range() -> None:
+def test_cudn_template_separates_infrastructure_ips_from_netris_dhcp_range() -> None:
     cudn = _render_cudn()
 
     assert cudn["kind"] == "ClusterUserDefinedNetwork"
@@ -240,10 +240,10 @@ def test_cudn_template_separates_gateway_from_netris_reserved_range() -> None:
     assert network["layer2"]["role"] == "Primary"
     assert network["layer2"]["subnets"] == ["192.0.2.0/24"]
     assert network["layer2"]["defaultGatewayIPs"] == ["192.0.2.1"]
-    assert network["layer2"]["infrastructureSubnets"] == ["192.0.2.1/32"]
+    assert network["layer2"]["infrastructureSubnets"] == ["192.0.2.1/32", "192.0.2.2/32"]
     assert network["layer2"]["reservedSubnets"] == [
         "192.0.2.0/32",
-        "192.0.2.2/31",
+        "192.0.2.3/32",
         "192.0.2.4/30",
         "192.0.2.8/29",
         "192.0.2.16/28",
@@ -256,9 +256,18 @@ def test_cudn_template_separates_gateway_from_netris_reserved_range() -> None:
         for address in ipaddress.ip_network(cidr)
     }
     assert ipaddress.ip_address("192.0.2.1") not in reserved_addresses
-    assert ipaddress.ip_address("192.0.2.1") in ipaddress.ip_network(
-        network["layer2"]["infrastructureSubnets"][0]
-    )
+    assert ipaddress.ip_address("192.0.2.2") not in reserved_addresses
+    assert ipaddress.ip_address("192.0.2.3") in reserved_addresses
+    assert ipaddress.ip_address("192.0.2.1") in {
+        address
+        for cidr in network["layer2"]["infrastructureSubnets"]
+        for address in ipaddress.ip_network(cidr)
+    }
+    assert ipaddress.ip_address("192.0.2.2") in {
+        address
+        for cidr in network["layer2"]["infrastructureSubnets"]
+        for address in ipaddress.ip_network(cidr)
+    }
     assert network["evpn"] == {"vtep": "tenant-vtep", "macVRF": {"vni": 10007}, "ipVRF": {"vni": 20007}}
 
 
@@ -270,7 +279,7 @@ def test_cudn_template_separates_gateway_from_netris_reserved_range() -> None:
             "192.0.2.1",
             [
                 "192.0.2.0/32",
-                "192.0.2.2/31",
+                "192.0.2.3/32",
                 "192.0.2.4/30",
                 "192.0.2.8/29",
                 "192.0.2.16/28",
@@ -281,28 +290,38 @@ def test_cudn_template_separates_gateway_from_netris_reserved_range() -> None:
         (
             "192.0.2.0/26",
             "192.0.2.1",
-            ["192.0.2.0/32", "192.0.2.2/31", "192.0.2.4/30", "192.0.2.8/29", "192.0.2.16/28", "192.0.2.32/27"],
+            ["192.0.2.0/32", "192.0.2.3/32", "192.0.2.4/30", "192.0.2.8/29", "192.0.2.16/28", "192.0.2.32/27"],
         ),
-        ("198.51.100.8/30", "198.51.100.9", ["198.51.100.8/32", "198.51.100.10/31"]),
-        ("192.0.2.0/30", "192.0.2.1", ["192.0.2.0/32", "192.0.2.2/31"]),
+        ("198.51.100.8/30", "198.51.100.9", ["198.51.100.8/32", "198.51.100.11/32"]),
+        ("192.0.2.0/30", "192.0.2.1", ["192.0.2.0/32", "192.0.2.3/32"]),
+        ("192.0.2.0/29", "192.0.2.1", ["192.0.2.0/32", "192.0.2.3/32", "192.0.2.4/30"]),
     ],
 )
-def test_evpn_fabric_ipam_split_is_complete_and_gateway_disjoint(
+def test_evpn_fabric_ipam_split_is_complete_and_infrastructure_disjoint(
     reserved_range: str, gateway: str, reserved_subnets: list[str]
 ) -> None:
     result = evpn_fabric_ipam(reserved_range)
+    management_ip = str(ipaddress.ip_address(int(ipaddress.ip_network(reserved_range).network_address) + 2))
 
     assert result["gateway_ip"] == gateway
     assert result["gateway_infrastructure_subnet"] == f"{gateway}/32"
+    assert result["management_infrastructure_subnet"] == f"{management_ip}/32"
     assert result["reserved_subnets"] == reserved_subnets
 
     original = set(ipaddress.ip_network(reserved_range))
     allocated = set().union(*(set(ipaddress.ip_network(cidr)) for cidr in reserved_subnets))
-    assert original - allocated == {ipaddress.ip_address(gateway)}
-    assert all(ipaddress.ip_address(gateway) not in ipaddress.ip_network(cidr) for cidr in reserved_subnets)
+    assert original - allocated == {ipaddress.ip_address(gateway), ipaddress.ip_address(management_ip)}
+    assert all(
+        ipaddress.ip_address(infrastructure_ip) not in ipaddress.ip_network(cidr)
+        for infrastructure_ip in (gateway, management_ip)
+        for cidr in reserved_subnets
+    )
 
 
-@pytest.mark.parametrize("reserved_range", ["192.0.2.1/26", "192.0.2.1-192.0.2.20", "2001:db8::/64", "192.0.2.0/31"])
+@pytest.mark.parametrize(
+    "reserved_range",
+    ["192.0.2.1/26", "192.0.2.1-192.0.2.20", "2001:db8::/64", "192.0.2.0/31"],
+)
 def test_evpn_fabric_ipam_rejects_noncanonical_or_unsupported_ranges(reserved_range: str) -> None:
     with pytest.raises(AnsibleFilterError, match="No Kubernetes resources were changed"):
         evpn_fabric_ipam(reserved_range)
