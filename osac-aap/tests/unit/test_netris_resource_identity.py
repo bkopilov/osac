@@ -62,6 +62,8 @@ def test_netris_subnet_flow_supplies_full_identity_to_ipam_roles() -> None:
     assert parent_ipam_create["vars"]["ipam_tenant_id"] == "{{ netris_tenant_id }}"
 
     delete = _tasks(TEMPLATE_NETRIS / "delete_subnet.yaml")
+    parent_vnet = _named_task(delete, "Set parent VirtualNetwork name")
+    assert parent_vnet["when"] == "is_cudn_evpn"
     parent_lookup = _named_task(delete, "Find the exact IPAM parent for this Subnet")
     assert parent_lookup["ansible.builtin.include_role"]["tasks_from"] == "find_subnet_by_identity"
     assert parent_lookup["vars"] == {
