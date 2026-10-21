@@ -51,7 +51,7 @@ def test_ipam_create_and_delete_match_the_complete_requested_identity() -> None:
     assert _named_task(delete, "Fail if the IPAM deletion identity is ambiguous")["ansible.builtin.assert"][
         "that"
     ] == ["_existing_ipam_subnets | length <= 1"]
-    delete_request = _named_task(delete, "Delete IPAM subnet")["ansible.builtin.uri"]
+    delete_request = _named_task(delete, "Delete IPAM subnet")["netris.controller.protected_uri"]
     assert delete_request["url"].endswith("/api/v2/ipam/subnet/{{ _existing_ipam_subnet.id }}")
 
 
@@ -98,7 +98,7 @@ def test_vnet_create_delete_and_gateway_update_are_identity_scoped() -> None:
     assert _named_task(delete, "Fail if the V-Net deletion identity is ambiguous")["ansible.builtin.assert"][
         "that"
     ] == ["_existing_vnets | length <= 1"]
-    delete_request = _named_task(delete, "Delete V-Net")["ansible.builtin.uri"]
+    delete_request = _named_task(delete, "Delete V-Net")["netris.controller.protected_uri"]
     assert delete_request["url"].endswith("/api/v2/vnet/{{ _existing_vnet.id }}")
 
     subnet_create = _tasks(TEMPLATE_NETRIS / "create_subnet.yaml")

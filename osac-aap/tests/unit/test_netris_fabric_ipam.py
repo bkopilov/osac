@@ -287,7 +287,7 @@ def test_subnet_delete_resolves_ipam_parent_through_identity_scoped_role() -> No
 def test_ipam_parent_identity_lookup_filters_and_rejects_ambiguity() -> None:
     tasks = yaml.safe_load((IPAM_ROLE_TASKS / "find_subnet_by_identity.yaml").read_text())
     query = next(task for task in tasks if task.get("name") == "Query IPAM subnets for the requested identity")
-    assert query["ansible.builtin.uri"]["force"] is True
+    assert query["netris.controller.protected_uri"]["force"] is True
 
     find = next(task for task in tasks if task.get("name") == "Find IPAM subnets matching the supplied identity")
     expression = find["ansible.builtin.set_fact"]["ipam_subnets_by_identity"]
