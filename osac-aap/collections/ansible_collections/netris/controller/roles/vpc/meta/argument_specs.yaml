@@ -28,7 +28,7 @@ argument_specs:
       vpc_name:
         type: str
         description: "Name of the VPC to find."
-      vpc_id:
+      vpc_lookup_id:
         type: int
         description: "Restrict lookup to this exact Netris VPC ID."
       vpc_tenant_id:

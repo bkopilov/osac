@@ -1,3 +1,6 @@
+import os
+import shutil
+import subprocess
 from pathlib import Path
 
 import yaml
@@ -428,7 +431,6 @@ def test_owner_handoff_promotes_oldest_cudn_enabled_sibling_before_removing_old_
     select = tasks[select_index]["ansible.builtin.set_fact"]["_cudn_evpn_next_owner"]
     select_expression = Environment().compile_expression(select.removeprefix("{{").removesuffix("}}").strip())
     assert select_expression(_cudn_evpn_owner_candidates=candidates) == tie_breaker
-
     promote = tasks[promote_index]
     assert promote["kubernetes.core.k8s"]["state"] == "present"
     assert promote["kubernetes.core.k8s"]["definition"] == "{{ lookup('template', 'cudn.yaml.j2') | from_yaml }}"
@@ -457,6 +459,59 @@ def test_owner_handoff_promotes_oldest_cudn_enabled_sibling_before_removing_old_
     assert "observedGeneration" in ready["until"]
     assert ready["retries"] == 30
     assert ready["delay"] == 10
+
+
+def test_owner_handoff_accepts_maximum_supported_netris_subnet_prefix(tmp_path: Path) -> None:
+    ansible_playbook = shutil.which("ansible-playbook")
+    assert ansible_playbook is not None, "ansible-playbook must be installed in the AAP dev environment"
+
+    task = next(task for task in _delete_tasks() if task.get("name") == "Validate successor fabric outputs for CUDN handoff")
+    playbook = tmp_path / "validate_successor_fabric.yaml"
+    ansible_home = tmp_path / "ansible-home"
+    ansible_local_temp = tmp_path / "ansible-local"
+    ansible_home.mkdir()
+    ansible_local_temp.mkdir()
+    playbook.write_text(
+        yaml.safe_dump(
+            [
+                {
+                    "hosts": "localhost",
+                    "gather_facts": False,
+                    "vars": {
+                        "_cudn_owner_subnet_name": "old-owner",
+                        "_deleting_subnet_name": "old-owner",
+                        "_cudn_evpn_next_owner": {"metadata": {"name": "successor"}},
+                        "_cudn_next_owner_subnet_cidr": "192.0.2.0/29",
+                        "_cudn_next_owner_reserved_range": "192.0.2.0/30",
+                        "_cudn_next_owner_fabric_output": {
+                            "resources": [
+                                {
+                                    "data": {
+                                        "l2_vni": "100",
+                                        "l3_vni": "200",
+                                        "fabric_reserved_range": "192.0.2.0/30",
+                                    }
+                                }
+                            ]
+                        },
+                    },
+                    "tasks": [task],
+                }
+            ],
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    result = subprocess.run(
+        [ansible_playbook, "-v", "-i", "localhost,", "-c", "local", str(playbook)],
+        cwd=Path(__file__).resolve().parents[2],
+        capture_output=True,
+        text=True,
+        check=False,
+        env={**os.environ, "ANSIBLE_HOME": str(ansible_home), "ANSIBLE_LOCAL_TEMP": str(ansible_local_temp)},
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 def test_owner_handoff_creates_or_updates_cudn_before_transferring_lease() -> None:

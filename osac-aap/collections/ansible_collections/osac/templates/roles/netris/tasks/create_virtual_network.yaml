@@ -69,4 +69,4 @@
     data:
       vpc_id: "{{ vpc_id | int }}"
     per_host: false
-    aggregate: true
+    aggregate: false

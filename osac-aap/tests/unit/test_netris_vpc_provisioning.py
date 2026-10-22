@@ -1,4 +1,5 @@
 import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -63,8 +64,67 @@ def test_virtual_network_exports_vpc_id_as_aap_job_artifact() -> None:
     assert tasks[export_index]["ansible.builtin.set_stats"] == {
         "data": {"vpc_id": "{{ vpc_id | int }}"},
         "per_host": False,
-        "aggregate": True,
+        "aggregate": False,
     }
+
+
+def test_vpc_id_artifact_replaces_previous_value_and_is_an_integer(tmp_path: Path) -> None:
+    ansible_playbook = shutil.which("ansible-playbook")
+    assert ansible_playbook is not None, "ansible-playbook must be installed in the AAP dev environment"
+
+    export_task = next(task for task in _virtual_network_tasks() if task.get("name") == "Export VirtualNetwork VPC ID")
+    first_export = {**export_task, "vars": {"vpc_id": 7}}
+    final_export = {**export_task, "vars": {"vpc_id": "19"}, "register": "export_result"}
+    playbook = tmp_path / "export_vpc_id.yaml"
+    ansible_config = tmp_path / "ansible.cfg"
+    ansible_home = tmp_path / "ansible-home"
+    ansible_local_temp = tmp_path / "ansible-local"
+    ansible_home.mkdir()
+    ansible_local_temp.mkdir()
+    ansible_config.write_text(
+        "[defaults]\nshow_custom_stats = True\njinja2_native = True\n",
+        encoding="utf-8",
+    )
+    playbook.write_text(
+        yaml.safe_dump(
+            [
+                {
+                    "hosts": "localhost",
+                    "gather_facts": False,
+                    "tasks": [
+                        first_export,
+                        final_export,
+                        {
+                            "name": "Check the exported VPC ID",
+                            "ansible.builtin.assert": {
+                                "that": [
+                                    "export_result.ansible_stats.data.vpc_id == 19",
+                                    "export_result.ansible_stats.data.vpc_id is integer",
+                                ]
+                            },
+                        },
+                    ],
+                }
+            ],
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    result = subprocess.run(
+        [ansible_playbook, "-v", "-i", "localhost,", "-c", "local", str(playbook)],
+        capture_output=True,
+        text=True,
+        check=False,
+        env={
+            **os.environ,
+            "ANSIBLE_CONFIG": str(ansible_config),
+            "ANSIBLE_HOME": str(ansible_home),
+            "ANSIBLE_LOCAL_TEMP": str(ansible_local_temp),
+        },
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert re.search(r'RUN:\s*\{\s*"vpc_id": 19\s*\}', result.stdout), result.stdout
 
 
 def _run_vpc_id_validation(

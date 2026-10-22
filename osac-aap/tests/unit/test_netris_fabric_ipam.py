@@ -229,7 +229,15 @@ def test_reserved_prefix_reconciliation_is_idempotent_and_checks_identity(tmp_pa
         assert result.returncode != 0
         assert not posts
         assert len(deletes) == (1 if scenario == "delete-rejected" else 0)
-        assert "IPAM" in result.stdout or "prefix" in result.stdout
+        expected_failure_messages = {
+            "wrong-parent": "does not match this Subnet's name",
+            "wrong-vpc": "Refusing to create a fabric prefix under an IPAM parent",
+            "missing-parent": "Refusing to create a fabric prefix under an IPAM parent",
+            "prefix-conflict": "does not match this Subnet's name",
+            "hosts-present": "has hosts or child prefixes",
+            "delete-rejected": "Netris refused to delete the old reserved fabric IPAM prefix",
+        }
+        assert expected_failure_messages[scenario] in result.stdout
 
 
 def test_gateway_creation_waits_for_reserved_ipam_and_cleanup_removes_child_first() -> None:

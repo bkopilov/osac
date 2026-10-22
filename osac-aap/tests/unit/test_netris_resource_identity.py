@@ -3,6 +3,7 @@
 from pathlib import Path
 
 import yaml
+from jinja2 import Environment
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -123,17 +124,35 @@ def test_vnet_create_delete_and_gateway_update_are_identity_scoped() -> None:
 
 def test_parent_vpc_lookup_matches_id_and_tenant_and_rejects_ambiguity() -> None:
     read = _tasks(VPC_ROLE / "read.yaml")
-    assert "vpc_id | int" in _named_task(read, "Filter VPCs by ID")["ansible.builtin.set_fact"][
+    filter_by_id = _named_task(read, "Filter VPCs by ID")
+    assert "vpc_lookup_id | int" in filter_by_id["ansible.builtin.set_fact"][
         "_netris_vpc_matches"
     ]
+    assert filter_by_id["when"] == "vpc_lookup_id is defined"
+    filter_by_id_enabled = Environment().compile_expression(filter_by_id["when"])
+    assert filter_by_id_enabled(vpc_id=99) is False
+    assert filter_by_id_enabled(vpc_id=99, vpc_lookup_id=42) is True
+    filter_by_id_expression = Environment().compile_expression(
+        filter_by_id["ansible.builtin.set_fact"]["_netris_vpc_matches"]
+        .removeprefix("{{")
+        .removesuffix("}}")
+        .strip()
+    )
+    vpcs = [{"id": 42, "name": "requested"}, {"id": 99, "name": "other"}]
+    assert filter_by_id_expression(_netris_vpc_matches=vpcs, vpc_id=99, vpc_lookup_id=42) == [vpcs[0]]
     assert "vpc_tenant_id | int" in _named_task(read, "Filter VPCs by admin tenant")["ansible.builtin.set_fact"][
         "_netris_vpc_matches"
     ]
     assert _named_task(read, "Fail if the VPC lookup is ambiguous")["ansible.builtin.assert"]["that"] == [
         "_netris_vpc_matches | length <= 1"
     ]
+    read_args = yaml.safe_load((VPC_ROLE.parent / "meta" / "argument_specs.yaml").read_text(encoding="utf-8"))[
+        "argument_specs"
+    ]["read"]["options"]
+    assert "vpc_lookup_id" in read_args
+    assert "vpc_id" not in read_args
 
     subnet_create = _tasks(TEMPLATE_NETRIS / "create_subnet.yaml")
     role_call = _named_task(subnet_create, "Look up parent VPC by name")
-    assert role_call["vars"]["vpc_id"] == "{{ subnet_virtual_network_vpc_id }}"
+    assert role_call["vars"]["vpc_lookup_id"] == "{{ subnet_virtual_network_vpc_id }}"
     assert role_call["vars"]["vpc_tenant_id"] == "{{ netris_tenant_id }}"

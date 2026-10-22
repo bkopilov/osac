@@ -2,6 +2,7 @@
 # List VPCs and optionally find one by name.
 # Optional variables:
 #   vpc_name — find a specific VPC by name
+#   vpc_lookup_id — restrict the lookup to this exact Netris VPC ID
 #   vpc_tenant_id — restrict the lookup to the VPC's admin tenant
 # Output facts:
 #   netris_vpcs   — full list of VPCs
@@ -47,9 +48,9 @@
   ansible.builtin.set_fact:
     _netris_vpc_matches: >-
       {{ _netris_vpc_matches
-         | selectattr('id', 'equalto', vpc_id | int)
+         | selectattr('id', 'equalto', vpc_lookup_id | int)
          | list }}
-  when: vpc_id is defined
+  when: vpc_lookup_id is defined
 
 - name: Filter VPCs by admin tenant
   ansible.builtin.set_fact:
@@ -67,12 +68,12 @@
     fail_msg: >-
       More than one Netris VPC matches the supplied name, ID, and admin tenant.
       Refusing to select an ambiguous VPC.
-  when: vpc_name is defined or vpc_id is defined or vpc_tenant_id is defined
+  when: vpc_name is defined or vpc_lookup_id is defined or vpc_tenant_id is defined
 
 - name: Set VPC facts from the matching VPC
   ansible.builtin.set_fact:
     netris_vpc: "{{ _netris_vpc_matches | first | default(none) }}"
-  when: vpc_name is defined or vpc_id is defined or vpc_tenant_id is defined
+  when: vpc_name is defined or vpc_lookup_id is defined or vpc_tenant_id is defined
 
 - name: Set VPC facts (no filter)
   ansible.builtin.set_fact:
@@ -80,5 +81,5 @@
     netris_vpc: "{{ none }}"
   when:
     - vpc_name is not defined
-    - vpc_id is not defined
+    - vpc_lookup_id is not defined
     - vpc_tenant_id is not defined

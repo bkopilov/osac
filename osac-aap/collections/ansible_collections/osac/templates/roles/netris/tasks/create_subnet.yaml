@@ -74,7 +74,7 @@
     tasks_from: read
   vars:
     vpc_name: "{{ subnet_virtual_network_name }}"
-    vpc_id: "{{ subnet_virtual_network_vpc_id }}"
+    vpc_lookup_id: "{{ subnet_virtual_network_vpc_id }}"
     vpc_tenant_id: "{{ netris_tenant_id }}"
 
 - name: Set parent VPC
