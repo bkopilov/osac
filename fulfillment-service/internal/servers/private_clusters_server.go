@@ -240,10 +240,6 @@ func (b *PrivateClustersServerBuilder) Build() (result *PrivateClustersServer, e
 	}
 
 	// Create the generic server:
-	// TODO(OSAC-1060): Remove AddAllowedTenants(auth.SharedTenant) once the osac-operator storage
-	// controller handles CaaS cluster deletion independently of tenant-level storage provisioning.
-	// CaaS e2e tests use SA auth → shared tenant to avoid cluster-storage finalizer blocking deletion
-	// when AAP storage provisioning jobs fail in test environments without configured backends.
 	generic, err := NewGenericServer[*privatev1.Cluster]().
 		SetLogger(b.logger).
 		SetService(privatev1.Clusters_ServiceDesc.ServiceName).
@@ -251,7 +247,6 @@ func (b *PrivateClustersServerBuilder) Build() (result *PrivateClustersServer, e
 		SetTenancyLogic(b.tenancyLogic).
 		SetMetricsRegisterer(b.metricsRegisterer).
 		SetFilterDesc(b.filterDesc).
-		AddAllowedTenants(auth.SharedTenant).
 		Build()
 	if err != nil {
 		return
@@ -543,19 +538,20 @@ func (s *PrivateClustersServer) validateSpecUpdateRequest(request *privatev1.Clu
 func (s *PrivateClustersServer) Delete(ctx context.Context,
 	request *privatev1.ClustersDeleteRequest) (response *privatev1.ClustersDeleteResponse, err error) {
 	id := request.GetId()
-	if id != "" {
-		getResponse, getErr := s.generic.dao.Get().SetId(id).Do(ctx)
-		if getErr != nil {
-			var notFoundErr *dao.ErrNotFound
-			if !errors.As(getErr, &notFoundErr) {
-				err = getErr
-				return
-			}
-		} else if getResponse.GetObject().GetSpec().GetAutoExternalIpAttachment() {
-			err = s.autoCleanupExternalIP(ctx, id)
-			if err != nil {
-				return
-			}
+	if id == "" {
+		return nil, grpcstatus.Error(grpccodes.InvalidArgument, "identifier is mandatory")
+	}
+	cluster, err := lockLifecycleResource(ctx, s.generic.dao, id, "Cluster")
+	if err != nil {
+		return
+	}
+	if err = s.lifecycle.rejectManualAttachmentDelete(ctx, "Cluster", id, cluster.GetMetadata()); err != nil {
+		return
+	}
+	if cluster.GetSpec().GetAutoExternalIpAttachment() {
+		err = s.autoCleanupExternalIP(ctx, id)
+		if err != nil {
+			return
 		}
 	}
 	err = s.generic.Delete(ctx, request, &response)
@@ -563,10 +559,7 @@ func (s *PrivateClustersServer) Delete(ctx context.Context,
 }
 
 func (s *PrivateClustersServer) autoCleanupExternalIP(ctx context.Context, clusterID string) error {
-	filter := fmt.Sprintf(
-		"this.metadata.labels['%s'] == '%s'",
-		autoCreatedForLabel, clusterID,
-	)
+	filter := autoCreatedExternalIPAttachmentFilter(clusterID)
 	listResp, err := s.externalIPAttachmentDao.List().SetFilter(filter).Do(ctx)
 	if err != nil {
 		return fmt.Errorf("auto_external_ip_attachment cleanup: failed to list attachments: %w", err)
@@ -585,6 +578,10 @@ func (s *PrivateClustersServer) autoCleanupExternalIP(ctx context.Context, clust
 		if err != nil {
 			return fmt.Errorf("auto_external_ip_attachment cleanup: %w", err)
 		}
+	}
+
+	if err := s.lifecycle.deleteAutoCreatedExternalIPs(ctx, clusterID); err != nil {
+		return fmt.Errorf("auto_external_ip_attachment cleanup: %w", err)
 	}
 
 	return nil
@@ -1082,7 +1079,7 @@ func (s *PrivateClustersServer) validateNetworkAttachmentState(ctx context.Conte
 			"spec.network_attachment.subnet is required")
 	}
 
-	subnet, err := resolveAndCanonicalizeReference(ctx, s.subnetsDao, cluster.GetMetadata(), subnetRef,
+	subnet, err := resolveAndCanonicalizeLockedReference(ctx, s.subnetsDao, cluster.GetMetadata(), subnetRef,
 		"subnet", grpccodes.NotFound)
 	if err != nil {
 		if grpcstatus.Code(err) == grpccodes.NotFound {
@@ -1114,7 +1111,7 @@ func (s *PrivateClustersServer) validateNetworkAttachmentState(ctx context.Conte
 				"spec.network_attachment.security_groups[%d]: reference is empty", i)
 		}
 
-		sg, err := resolveAndCanonicalizeReference(ctx, s.securityGroupsDao, cluster.GetMetadata(), sgRef,
+		sg, err := resolveAndCanonicalizeLockedReference(ctx, s.securityGroupsDao, cluster.GetMetadata(), sgRef,
 			"security group", grpccodes.NotFound)
 		if err != nil {
 			if grpcstatus.Code(err) == grpccodes.NotFound {
@@ -1199,8 +1196,8 @@ func selectClusterFabricInterface(instanceType *privatev1.BareMetalInstanceType)
 	return "", fmt.Errorf("bare metal instance type '%s' has no network port with role 'fabric'", instanceType.GetId())
 }
 
-// autoProvisionExternalIPs creates two ExternalIPs and two ExternalIPAttachments
-// (one for API, one for ingress) from the best available pool.
+// autoProvisionExternalIPs creates the API and ingress ExternalIPs. The ClusterOrder
+// reconciler requests their ExternalIPAttachments once the cluster endpoints are ready.
 func (s *PrivateClustersServer) autoProvisionExternalIPs(ctx context.Context, cluster *privatev1.Cluster) error {
 	pool, err := SelectExternalIPPool(ctx, s.externalIPPoolDao, privatev1.IPFamily_IP_FAMILY_IPV4)
 	if err != nil {
@@ -1215,23 +1212,31 @@ func (s *PrivateClustersServer) autoProvisionExternalIPs(ctx context.Context, cl
 	tenant := cluster.GetMetadata().GetTenant()
 	clusterID := cluster.GetId()
 
-	endpoints := []privatev1.ExternalIPAttachmentEndpoint{
-		privatev1.ExternalIPAttachmentEndpoint_EXTERNAL_IP_ATTACHMENT_ENDPOINT_API,
-		privatev1.ExternalIPAttachmentEndpoint_EXTERNAL_IP_ATTACHMENT_ENDPOINT_INGRESS,
+	endpoints := []struct {
+		endpoint privatev1.ExternalIPAttachmentEndpoint
+		name     string
+	}{
+		{endpoint: privatev1.ExternalIPAttachmentEndpoint_EXTERNAL_IP_ATTACHMENT_ENDPOINT_API, name: "api"},
+		{endpoint: privatev1.ExternalIPAttachmentEndpoint_EXTERNAL_IP_ATTACHMENT_ENDPOINT_INGRESS, name: "ingress"},
 	}
 
 	for _, endpoint := range endpoints {
+		eipLabels := map[string]string{
+			autoCreatedLabel:         "true",
+			autoCreatedForLabel:      clusterID,
+			autoCreatedEndpointLabel: endpoint.name,
+			autoCreatedKindLabel:     "cluster",
+		}
 		eip := privatev1.ExternalIP_builder{
 			Metadata: privatev1.Metadata_builder{
+				Name:   fmt.Sprintf("auto-eip-%s-%s", clusterID, endpoint.name),
 				Tenant: tenant,
-				Labels: map[string]string{
-					autoCreatedLabel:    "true",
-					autoCreatedForLabel: clusterID,
-				},
+				Labels: eipLabels,
 				Annotations: map[string]string{
+					tenantAnnotation:         tenant,
 					ownerReferenceAnnotation: clusterID,
 				},
-				Creator: "system",
+				Creator: systemCreator,
 			}.Build(),
 			Spec: privatev1.ExternalIPSpec_builder{
 				Pool: privatev1.ExternalIPPoolReference_builder{Id: pool.GetId()}.Build(),
@@ -1241,42 +1246,10 @@ func (s *PrivateClustersServer) autoProvisionExternalIPs(ctx context.Context, cl
 			}.Build(),
 		}.Build()
 
-		eipResp, err := s.externalIPDao.Create().SetObject(eip).Do(ctx)
+		_, err = s.externalIPDao.Create().SetObject(eip).Do(ctx)
 		if err != nil {
 			return fmt.Errorf("auto_external_ip_attachment: failed to create ExternalIP: %w", err)
 		}
-		eipID := eipResp.GetObject().GetId()
-		if err = s.lifecycle.lockNewClusterAttachmentReferences(ctx, eipID, clusterID); err != nil {
-			return fmt.Errorf("auto_external_ip_attachment: failed to lock attachment references: %w", err)
-		}
-
-		attachment := privatev1.ExternalIPAttachment_builder{
-			Metadata: privatev1.Metadata_builder{
-				Tenant: tenant,
-				Labels: map[string]string{
-					autoCreatedLabel:    "true",
-					autoCreatedForLabel: clusterID,
-				},
-				Annotations: map[string]string{
-					ownerReferenceAnnotation: clusterID,
-				},
-				Creator: "system",
-			}.Build(),
-			Spec: privatev1.ExternalIPAttachmentSpec_builder{
-				ExternalIp:     privatev1.ExternalIPLocalReference_builder{Id: eipID}.Build(),
-				Cluster:        privatev1.ClusterLocalReference_builder{Id: clusterID}.Build(),
-				TargetEndpoint: endpoint,
-			}.Build(),
-			Status: privatev1.ExternalIPAttachmentStatus_builder{
-				State: privatev1.ExternalIPAttachmentState_EXTERNAL_IP_ATTACHMENT_STATE_PENDING,
-			}.Build(),
-		}.Build()
-
-		_, err = s.externalIPAttachmentDao.Create().SetObject(attachment).Do(ctx)
-		if err != nil {
-			return fmt.Errorf("auto_external_ip_attachment: failed to create ExternalIPAttachment: %w", err)
-		}
-
 	}
 
 	err = UpdatePoolCapacity(ctx, s.externalIPPoolDao, pool.GetId(), 2)
@@ -1284,7 +1257,7 @@ func (s *PrivateClustersServer) autoProvisionExternalIPs(ctx context.Context, cl
 		return grpcstatus.Errorf(grpccodes.FailedPrecondition, "auto_external_ip_attachment: %s", err)
 	}
 
-	s.logger.InfoContext(ctx, "auto-provisioned external IP attachments for cluster",
+	s.logger.InfoContext(ctx, "auto-provisioned external IPs for cluster",
 		slog.String("cluster_id", clusterID),
 		slog.String("pool_id", pool.GetId()),
 	)
