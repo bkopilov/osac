@@ -669,6 +669,52 @@ provider VNI range are fixed after setup. Include the VTEP, fabric loopback,
 and uplink ranges in `global.networking.excludedIpv4Cidrs` before installing
 OSAC ([Section 4.4.1](#441-choosing-the-networking-settings)).
 
+| Value | Meaning | Provided by |
+|---|---|---|
+| `evpn.enabled` | Configures EVPN host networking. Default `false`. | You |
+| `evpn.nmstate.install` | Installs the NMState Operator. Set `false` when it is already installed. Default `true`. | Cluster admin |
+| `evpn.nmstate.channel` | NMState Operator channel. Default `stable`. | Cluster admin |
+| `evpn.configureClusterNetwork` | Applies the cluster network operator settings (one OVN-Kubernetes restart). Default `true`. | Cluster admin |
+| `evpn.vtepCIDR` | Required. The range that holds every node's VTEP address. Fixed after installation. | Agreed with the fabric admin |
+| `evpn.bgp.asn` | Required. The node ASN; a node can override it. It must match the ASN that the fabric admin configured for the node's BGP neighbors. | Agreed with the fabric admin |
+| `evpn.bgp.acceptPrefixes` | Required. The fabric loopback (remote VTEP) ranges. Only /32 routes inside them are accepted. | Fabric admin |
+| `evpn.bgp.activeActive` | Optional. Defaults to `false`; set `true` to allow up to 16 eligible IPv4 BGP paths. FRR still applies its other multipath eligibility checks. | You |
+| `evpn.bgp.activeBackup` | Optional. Defaults to `false` and cannot be enabled with `activeActive`. Each node must have exactly one uplink with `role: active` and at least one with `role: backup`. When EVPN is enabled, L2VPN EVPN inbound route-maps set local preference to 200/100 without prefix matching; the backup outbound route-map prepends the node ASN three times to EVPN routes sent to that neighbor. | You |
+| `evpn.bgp.waitForEstablished` | Fails the installation unless every BGP session becomes `Established`. Default `true`. | You |
+| `evpn.bgp.timeoutSeconds` | Maximum wait for each BGP session, at least 60. Default `900`. | You |
+| `evpn.nodes[].name` | Kubernetes node name. Add one entry for every node that runs VMs. | Cluster admin |
+| `evpn.nodes[].vtepIP` | The node's VTEP address, unique and inside `vtepCIDR`. | Agreed with the fabric admin |
+| `evpn.nodes[].asn` | Optional node ASN override. Defaults to `evpn.bgp.asn`. | Fabric admin |
+| `evpn.nodes[].uplinks[].interface` | The node interface cabled to a fabric leaf. One entry per cable. | Fabric admin |
+| `evpn.nodes[].uplinks[].address` | Optional IPv4 CIDR for the uplink. Omit it when the address is already configured. | Fabric admin |
+| `evpn.nodes[].uplinks[].peerAddress` | The leaf's BGP address. | Fabric admin |
+| `evpn.nodes[].uplinks[].peerASN` | The leaf's ASN. | Fabric admin |
+| `evpn.nodes[].uplinks[].role` | `active` or `backup`; required on every uplink when `evpn.bgp.activeBackup` is enabled. | You |
+
+For example, label each BGP neighbor explicitly when enabling active/backup:
+
+```yaml
+evpn:
+  enabled: true
+  vtepCIDR: 192.168.51.0/24
+  bgp:
+    asn: 4209999999
+    acceptPrefixes: [192.168.52.0/24]
+    activeBackup: true
+  nodes:
+    - name: worker-0
+      vtepIP: 192.168.51.1
+      uplinks:
+        - interface: ens5f0
+          peerAddress: 192.168.53.1
+          peerASN: 4200300002
+          role: active
+        - interface: ens7
+          peerAddress: 192.168.53.3
+          peerASN: 4200300003
+          role: backup
+```
+
 Platform administrators own the host-network values, BGP readiness checks,
 node additions and removals, and cleanup. Follow the administrator procedure
 for your environment. For the example setup using Helm, lifecycle procedures,
