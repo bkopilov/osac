@@ -5,8 +5,9 @@ including IP, MAC, or network-attachment data on any provisioned resource.
 
 ## Authoritative sources and implementation status
 
-This summary was checked against the accepted designs on `enhancement-proposals`
-`main` on 2026-09-30. Read the applicable full designs before finalizing scope:
+This summary was checked against the accepted designs in
+`enhancement-proposals` at revision `8576eceb35530f538d2a7ea7f92d8ce1b4548380`
+on 2026-11-10. Read the applicable full designs before finalizing scope:
 
 - [Unified networking, OSAC-1433](https://github.com/osac-project/enhancement-proposals/blob/main/enhancements/OSAC-1433-unified-networking/design.md)
 - [Default networking, OSAC-1433](https://github.com/osac-project/enhancement-proposals/blob/main/enhancements/OSAC-1433-default-networking/design.md)
@@ -207,11 +208,22 @@ as follows:
   declares it although its SecurityGroup tasks are no-ops. The value is derived,
   so it has no Helm value. A class whose default rules use `icmp` without the
   capability fails resolution.
-- **DNS:** OSAC has no per-resource DNS. VMs get the cluster DNS that
-  OVN-Kubernetes DHCP gives on the primary UDN. Bare metal on Netris gets an
+- **EVPN DHCP and DNS:** `cudn_evpn` uses OVN-Kubernetes DHCP for VMs, which
+  allocates from `overlay_ipv4_cidrs`. Its `reservedSubnets` covers only the
+  Subnet outside the overlay. The gateway and management-port addresses lie
+  inside the overlay and belong only in `infrastructureSubnets`. Netris enables DHCP
+  over `physical_ipv4_cidrs` when it creates the Subnet's V-Net and that
+  range is non-empty, and repairs it on every rerun; a physical attachment
+  also enables it before moving a port when an older V-Net has no range. The
+  range stays enabled after the attachment is removed. Netris cannot filter
+  DHCP offers by MAC, so
+  a physical-range offer can reach VMs on the same segment; whether a VM
+  accepts it remains an open lab check. OSAC has no per-resource DNS. VM DNS
+  comes from OVN-Kubernetes DHCP. Bare metal on Netris gets an
   installation-level resolver (default `8.8.8.8`) from the Netris default DHCP
   option set, a provider install step, not OSAC code; bare metal without
-  internet needs no DNS reachability. The settings `CUDN_EVPN_DNS_RESOLVERS`,
+  internet needs no DNS reachability. The settings
+  `CUDN_EVPN_DNS_RESOLVERS`,
   `NETRIS_DNS_RESOLVERS`, `NETRIS_DNS_SNAT_CIDR` and the Netris per-VN DNS SNAT
   are removed.
 - **ExternalIPPool tenant:** as the unified design says, every ExternalIPPool
