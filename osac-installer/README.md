@@ -410,6 +410,8 @@ evpn:
     asn: 4209999999
     acceptPrefixes:
       - 10.200.0.0/16
+    activeActive: false
+    activeBackup: false
     waitForEstablished: true
     timeoutSeconds: 900
   nodes:
@@ -420,6 +422,52 @@ evpn:
           address: 169.254.133.2/31
           peerAddress: 169.254.133.3
           peerASN: 4200300002
+```
+
+Set `evpn.bgp.activeActive: true` to enable FRR's `as-path multipath-relax`
+and `maximum-paths 16` for IPv4 unicast. The default `false` leaves those
+settings at FRR defaults. FRR still installs only paths that meet its other
+multipath eligibility checks.
+
+For active/backup forwarding, set `evpn.bgp.activeBackup: true` instead; it is
+mutually exclusive with `activeActive`. Set `role: active` or `role: backup`
+on every node uplink; each node needs exactly one active neighbor and at least
+one backup. The chart installs dedicated IPv4 unicast route-maps on every
+neighbor: the inbound route-maps match remote fabric VTEP `/32` routes from
+`acceptPrefixes` and set local preference to 200 on active neighbors or 100 on
+backups. The active outbound route-map matches the node's local VTEP `/32`, and
+the backup outbound route-map adds the same match and prepends the node ASN
+three times. L2VPN EVPN route-maps apply the same preferences without prefix
+matching so they cover every EVPN route. The L2VPN EVPN address family also
+activates the EVPN neighbors and advertises VNIs.
+
+frr-k8s treats interface-based unnumbered neighbors as dual-stack and would
+otherwise evaluate RFC 5549 IPv4 routes with IPv6 link-local next hops against
+its generated IPv6 deny lists. For unnumbered neighbors the chart applies
+matching IPv4 unicast route-maps directly to the neighbor, in every BGP mode,
+so those routes are never filtered by IPv6 policy. The chart does not add or
+modify any IPv6 prefix-list.
+
+```yaml
+evpn:
+  enabled: true
+  vtepCIDR: 10.200.255.0/24
+  bgp:
+    asn: 4209999999
+    acceptPrefixes: [10.200.0.0/16]
+    activeBackup: true
+  nodes:
+    - name: worker-0
+      vtepIP: 10.200.255.1
+      uplinks:
+        - interface: ens5f0
+          peerAddress: 169.254.133.1
+          peerASN: 4200300002
+          role: active
+        - interface: ens5f1
+          peerAddress: 169.254.133.3
+          peerASN: 4200300003
+          role: backup
 ```
 
 The Netris fabric side stays external: the fabric admin configures the links,
